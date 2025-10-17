@@ -96,6 +96,12 @@ export class ScraperOrchestrator {
 
       this.lastRequestTime = navResult.requestTime;
 
+      const filtersApplied = await this.navigator.applyFiltersIfNeeded(page, options);
+      if (filtersApplied) {
+        await humanizedWait(page, 1200, 0.25);
+        await simulateHumanBehavior(page);
+      }
+
       // Extract total results count
       const totalResults = await this.navigator.getTotalResults(page);
       if (totalResults > 0) {

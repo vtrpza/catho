@@ -139,11 +139,59 @@ export class PageNavigator {
   async getTotalResults(page) {
     try {
       const total = await page.evaluate(() => {
-        const totalElement = document.querySelector('.total-results, .results-count, [data-testid="results-count"]');
-        if (totalElement) {
-          const text = totalElement.textContent.replace(/\D/g, '');
-          return parseInt(text) || 0;
+        const normalizeNumber = (text = '') => {
+          if (!text) return null;
+          const cleaned = text.replace(/\s/g, '').replace(/[.,]/g, '');
+          const digits = cleaned.match(/\d+/g);
+          if (!digits) return null;
+          const numberString = digits.join('');
+          const parsed = parseInt(numberString, 10);
+          return Number.isNaN(parsed) ? null : parsed;
+        };
+
+        const selectors = [
+          '.total-results',
+          '.results-count',
+          '[data-testid="results-count"]',
+          '[data-testid="total-results"]',
+          '[data-testid="header-results-count"]'
+        ];
+
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          if (element) {
+            const parsed = normalizeNumber(element.textContent);
+            if (parsed !== null && parsed > 0) {
+              return parsed;
+            }
+          }
         }
+
+        const headingCandidates = Array.from(document.querySelectorAll('h1, h2, h3, p, span, strong'));
+        for (const node of headingCandidates) {
+          const text = node.textContent || '';
+          if (!text) continue;
+          if (!/curr\u00edculo|curriculo|currículos|curriculos|resultado|Encontramos/i.test(text)) {
+            continue;
+          }
+          const parsed = normalizeNumber(text);
+          if (parsed !== null && parsed > 0) {
+            return parsed;
+          }
+        }
+
+        const inlineText = document.body ? document.body.innerText || '' : '';
+        if (inlineText) {
+          const lines = inlineText.split('\n');
+          for (const line of lines) {
+            if (!/curr\u00edculo|curriculo|resultado|Encontramos/i.test(line)) continue;
+            const parsed = normalizeNumber(line);
+            if (parsed !== null && parsed > 0) {
+              return parsed;
+            }
+          }
+        }
+
         return 0;
       });
 
@@ -174,5 +222,395 @@ export class PageNavigator {
   reset() {
     this.currentPage = 0;
     this.hasMore = true;
+  }
+
+  /**
+   * Check if any filters are active
+   */
+  hasActiveFilters(options = {}) {
+    if (!options || typeof options !== 'object') {
+      return false;
+    }
+
+    const hasArrayValues = (value) => Array.isArray(value) && value.length > 0;
+
+    return (
+      hasArrayValues(options.salaryRanges) ||
+      hasArrayValues(options.ageRanges) ||
+      hasArrayValues(options.professionalAreas) ||
+      hasArrayValues(options.hierarchicalLevels) ||
+      hasArrayValues(options.educationLevels) ||
+      (options.gender && options.gender !== 'ambos') ||
+      (options.lastUpdated && options.lastUpdated !== 'indifferent') ||
+      (options.candidateSituation && options.candidateSituation !== 'indifferent') ||
+      (options.disabilityStatus && options.disabilityStatus !== 'indifferent')
+    );
+  }
+
+  /**
+   * Apply UI filters if needed (new Catho search interface)
+   */
+  async applyFiltersIfNeeded(page, options = {}) {
+    if (!this.hasActiveFilters(options)) {
+      return false;
+    }
+
+    try {
+      const opened = await this.isFilterDrawerOpen(page);
+      if (!opened) {
+        const clicked = await this.openFilterDrawer(page);
+        if (!clicked) {
+          console.warn('⚠️ Could not open Catho filter drawer');
+          return false;
+        }
+        await humanizedWait(page, 1200, 0.25);
+      }
+
+      const actions = [];
+
+      if (Array.isArray(options.salaryRanges) && options.salaryRanges.length > 0) {
+        actions.push(this.applySalaryFilter(page, options.salaryRanges));
+      }
+
+      if (Array.isArray(options.ageRanges) && options.ageRanges.length > 0) {
+        actions.push(this.applyCheckboxFilter(page, 'Idade', options.ageRanges.map(String)));
+      }
+
+      if (Array.isArray(options.professionalAreas) && options.professionalAreas.length > 0) {
+        actions.push(this.applyCheckboxFilter(page, 'Área Profissional', options.professionalAreas.map(String)));
+      }
+
+      if (Array.isArray(options.hierarchicalLevels) && options.hierarchicalLevels.length > 0) {
+        actions.push(this.applyCheckboxFilter(page, 'Nível Hierárquico', options.hierarchicalLevels.map(String)));
+      }
+
+      if (options.gender && options.gender !== 'ambos') {
+        actions.push(this.applyRadioFilter(page, 'Sexo', 'gender', options.gender));
+      }
+
+      if (options.lastUpdated && options.lastUpdated !== 'indifferent') {
+        const lastUpdatedValue = typeof options.lastUpdated === 'number'
+          ? String(options.lastUpdated)
+          : options.lastUpdated;
+        actions.push(this.applyRadioFilter(page, 'Última Atualização de Currículo', 'updatedDate', lastUpdatedValue));
+      }
+
+      if (options.candidateSituation && options.candidateSituation !== 'indifferent') {
+        const situationMap = {
+          unemployed: '0',
+          employed: '1',
+          indifferent: '-1'
+        };
+        const mappedValue = situationMap[options.candidateSituation] || '-1';
+        actions.push(this.applyRadioFilter(page, 'Situação do Candidato', 'isEmployed', mappedValue));
+      }
+
+      if (options.disabilityStatus && options.disabilityStatus !== 'indifferent') {
+        actions.push(this.applyDisabilityFilter(page, options.disabilityStatus));
+      }
+
+      if (Array.isArray(options.educationLevels) && options.educationLevels.length > 0) {
+        actions.push(this.applyCheckboxFilter(page, 'Escolaridade', options.educationLevels));
+      }
+
+      if (actions.length > 0) {
+        for (const action of actions) {
+          try {
+            await action;
+            await humanizedWait(page, 400, 0.2);
+          } catch (actionError) {
+            console.warn('⚠️ Failed to apply specific filter:', actionError.message);
+          }
+        }
+      }
+
+      await this.submitFilterDrawer(page);
+      await humanizedWait(page, 1500, 0.35);
+      return true;
+    } catch (error) {
+      console.warn('⚠️ Failed to apply filters via Catho UI:', error.message);
+      return false;
+    }
+  }
+
+  async isFilterDrawerOpen(page) {
+    try {
+      return await page.evaluate(() => {
+        const drawer = document.querySelector('.sc-hTUWRQ');
+        if (!drawer) return false;
+        const ariaHidden = drawer.getAttribute('aria-hidden');
+        if (ariaHidden === 'true') return false;
+        const style = window.getComputedStyle(drawer);
+        return style.display !== 'none';
+      });
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async openFilterDrawer(page) {
+    try {
+      await page.waitForSelector('button, a', { timeout: 5000 });
+
+      const clicked = await page.evaluate(() => {
+        const elements = Array.from(document.querySelectorAll('button, a'));
+        const target = elements.find((el) => {
+          const text = (el.textContent || '').toLowerCase();
+          return text.includes('filtrar') || text.includes('filtro') || text.includes('filtros');
+        });
+        if (target) {
+          target.click();
+          return true;
+        }
+        const iconButton = Array.from(document.querySelectorAll('button svg[data-testid="TuneIcon"]'))
+          .map((svg) => svg.closest('button'))
+          .find(Boolean);
+        if (iconButton) {
+          iconButton.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (!clicked) {
+        return false;
+      }
+
+      await page.waitForSelector('.Accordion__Wrapper-sc-xw8wcl-0', { timeout: 5000 });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async submitFilterDrawer(page) {
+    try {
+      await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const applyButton = buttons.find((btn) => {
+          const text = (btn.textContent || '').toLowerCase();
+          return (
+            text.includes('aplicar') ||
+            text.includes('ver resultados') ||
+            text.includes('buscar') ||
+            text.includes('ver') && text.includes('currículo')
+          );
+        });
+
+        if (applyButton) {
+          applyButton.click();
+        } else {
+          const closeButton = buttons.find((btn) => {
+            const text = (btn.textContent || '').toLowerCase();
+            return text.includes('fechar') || text.includes('concluir');
+          });
+          closeButton?.click();
+        }
+      });
+    } catch (error) {
+      console.warn('⚠️ Could not submit filter drawer:', error.message);
+    }
+  }
+
+  async applyCheckboxFilter(page, sectionTitle, values = []) {
+    if (!Array.isArray(values) || values.length === 0) {
+      return;
+    }
+    await page.evaluate(({ title, values: targetValues }) => {
+      const lowerTitle = title.toLowerCase();
+      const headers = Array.from(document.querySelectorAll('button[aria-controls]'));
+      const header = headers.find((btn) => (btn.textContent || '').toLowerCase().includes(lowerTitle));
+      if (!header) return;
+
+      const contentId = header.getAttribute('aria-controls');
+      if (!contentId) return;
+      const content = document.getElementById(contentId);
+      if (!content) return;
+
+      if (content.getAttribute('aria-hidden') === 'true') {
+        header.click();
+      }
+
+      const targetSet = new Set(targetValues.map(String));
+      const checkboxes = Array.from(content.querySelectorAll('input[type="checkbox"]'));
+      checkboxes.forEach((checkbox) => {
+        const value =
+          checkbox.value ||
+          checkbox.getAttribute('data-value') ||
+          checkbox.getAttribute('id') ||
+          checkbox.getAttribute('name');
+        if (!value) return;
+
+        const shouldCheck = targetSet.has(String(value));
+        if (shouldCheck && !checkbox.checked) {
+          checkbox.click();
+        } else if (!shouldCheck && checkbox.checked) {
+          checkbox.click();
+        }
+      });
+    }, { title: sectionTitle, values });
+  }
+
+  async applyRadioFilter(page, sectionTitle, inputName, targetValue) {
+    if (!targetValue && targetValue !== 0) {
+      return;
+    }
+    await page.evaluate(({ title, inputName, targetValue }) => {
+      const lowerTitle = title.toLowerCase();
+      const headers = Array.from(document.querySelectorAll('button[aria-controls]'));
+      const header = headers.find((btn) => (btn.textContent || '').toLowerCase().includes(lowerTitle));
+      if (!header) return;
+
+      const contentId = header.getAttribute('aria-controls');
+      if (!contentId) return;
+      const content = document.getElementById(contentId);
+      if (!content) return;
+
+      if (content.getAttribute('aria-hidden') === 'true') {
+        header.click();
+      }
+
+      const radios = Array.from(content.querySelectorAll(`input[type="radio"][name="${inputName}"]`));
+      const target = radios.find((radio) => String(radio.value) === String(targetValue));
+      if (target && !target.checked) {
+        target.click();
+      }
+    }, { title: sectionTitle, inputName, targetValue });
+  }
+
+  async applyDisabilityFilter(page, status = 'indifferent') {
+    if (!status || status === 'indifferent') {
+      return;
+    }
+
+    await page.evaluate((status) => {
+      const lowerTitle = 'deficiência';
+      const headers = Array.from(document.querySelectorAll('button[aria-controls]'));
+      const header = headers.find((btn) => (btn.textContent || '').toLowerCase().includes(lowerTitle));
+      if (!header) return;
+
+      const contentId = header.getAttribute('aria-controls');
+      if (!contentId) return;
+      const content = document.getElementById(contentId);
+      if (!content) return;
+      if (content.getAttribute('aria-hidden') === 'true') {
+        header.click();
+      }
+
+      const checkboxGroups = Array.from(content.querySelectorAll('input[type="checkbox"]'));
+      const shouldSelect = status === 'with_disability';
+
+      checkboxGroups.forEach((checkbox) => {
+        if (shouldSelect && !checkbox.checked) {
+          checkbox.click();
+        } else if (!shouldSelect && checkbox.checked) {
+          checkbox.click();
+        }
+      });
+    }, status);
+  }
+
+  async applySalaryFilter(page, salaryRangeIds = []) {
+    if (!Array.isArray(salaryRangeIds) || salaryRangeIds.length === 0) {
+      return;
+    }
+
+    const rangeMap = {
+      1: { min: 0, max: 1000 },
+      2: { min: 1000, max: 2000 },
+      3: { min: 2000, max: 3000 },
+      4: { min: 3000, max: 4000 },
+      5: { min: 4000, max: 5000 },
+      6: { min: 5000, max: 6000 },
+      7: { min: 6000, max: 7000 },
+      8: { min: 7000, max: 8000 },
+      9: { min: 8000, max: 10000 },
+      10: { min: 10000, max: 12000 },
+      11: { min: 12000, max: 15000 },
+      12: { min: 15000, max: 20000 },
+      13: { min: 20000, max: Infinity }
+    };
+
+    let minValue = Infinity;
+    let maxValue = 0;
+
+    salaryRangeIds.forEach((id) => {
+      const range = rangeMap[id];
+      if (!range) return;
+      minValue = Math.min(minValue, range.min);
+      maxValue = Math.max(maxValue, range.max);
+    });
+
+    if (minValue === Infinity) {
+      minValue = 0;
+    }
+
+    const formatLabel = (value, isMax = false) => {
+      if (value === Infinity || (isMax && value >= 20000)) {
+        return 'R$ 20.000 ou mais';
+      }
+      if (value <= 0) {
+        return 'R$ 0';
+      }
+      return new Intl.NumberFormat('pt-BR', {
+        style: 'currency',
+        currency: 'BRL',
+        maximumFractionDigits: 0,
+        minimumFractionDigits: 0
+      }).format(value);
+    };
+
+    const minLabel = formatLabel(minValue, false);
+    const maxLabel = formatLabel(maxValue, true);
+
+    await page.evaluate(({ minLabel, maxLabel }) => {
+      const lowerTitle = 'pretensão salarial';
+      const headers = Array.from(document.querySelectorAll('button[aria-controls]'));
+      const header = headers.find((btn) => (btn.textContent || '').toLowerCase().includes(lowerTitle));
+      if (!header) return;
+
+      const contentId = header.getAttribute('aria-controls');
+      if (!contentId) return;
+      const content = document.getElementById(contentId);
+      if (!content) return;
+      if (content.getAttribute('aria-hidden') === 'true') {
+        header.click();
+      }
+
+      const dropdownButtons = Array.from(content.querySelectorAll('div[role="combobox"] button'));
+      if (!dropdownButtons.length) return;
+
+      const selectOption = (button, targetLabel) => {
+        if (!button || !targetLabel) return;
+        const normalized = (value) => value.replace(/\s+/g, ' ').trim();
+
+        button.click();
+
+        const listbox = document.querySelector('[role="listbox"]');
+        if (!listbox) {
+          button.click();
+          return;
+        }
+
+        const options = Array.from(listbox.querySelectorAll('[role="option"], li, button'));
+        const targetOption = options.find((option) => {
+          const text = normalized(option.textContent || '');
+          return text === normalized(targetLabel);
+        }) || options.find((option) => {
+          const text = normalized(option.textContent || '');
+          return text.includes(targetLabel);
+        });
+
+        if (targetOption) {
+          targetOption.click();
+        } else {
+          listbox.dispatchEvent(new Event('keydown', { key: 'Escape', bubbles: true }));
+        }
+      };
+
+      const [minButton, maxButton] = dropdownButtons;
+      if (minButton) selectOption(minButton, minLabel);
+      if (maxButton) selectOption(maxButton, maxLabel);
+    }, { minLabel, maxLabel });
   }
 }
