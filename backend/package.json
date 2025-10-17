@@ -1,0 +1,28 @@
+{
+  "name": "catho-collector-backend",
+  "version": "1.0.0",
+  "description": "Backend para coleta de currículos do Catho.com.br",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "migrate": "node src/config/migrate.js",
+    "migrate:retry": "node src/config/migrate-retry-fields.js"
+  },
+  "keywords": ["catho", "scraper", "resumes"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "puppeteer": "^21.5.2",
+    "sqlite3": "^5.1.6",
+    "sqlite": "^5.1.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}
