@@ -69,15 +69,35 @@ function App() {
     }
     updateProgress(payload);
 
-    const totalValue =
-      typeof payload.filteredCount === 'number'
-        ? payload.filteredCount
-        : typeof payload.total === 'number'
-          ? payload.total
-          : null;
+    const rawTotal =
+      payload.filteredCount ??
+      payload.filtered ??
+      payload.total ??
+      payload.count ??
+      null;
+
+    let totalValue = null;
+    if (typeof rawTotal === 'number') {
+      totalValue = rawTotal;
+    } else if (typeof rawTotal === 'string') {
+      const digitsOnly = rawTotal.replace(/\D/g, '');
+      if (digitsOnly.length > 0) {
+        totalValue = Number(digitsOnly);
+      } else {
+        const parsed = Number(rawTotal);
+        if (!Number.isNaN(parsed)) {
+          totalValue = parsed;
+        }
+      }
+    }
 
     if (totalValue !== null) {
-      setFilteredCount(totalValue);
+      setFilteredCount((previous) => {
+        if (previous !== null && previous >= totalValue) {
+          return previous;
+        }
+        return totalValue;
+      });
     }
   }, [updateProgress]);
 
@@ -213,9 +233,17 @@ function App() {
       setCurrentPage(page);
       const resolvedTotal = response.data.pagination?.total;
       if (typeof resolvedTotal === 'number') {
-        setFilteredCount(resolvedTotal);
+        setFilteredCount((previous) => {
+          if (previous !== null && previous >= resolvedTotal) {
+            return previous;
+          }
+          return resolvedTotal;
+        });
         updateProgress({
-          total: resolvedTotal,
+          total: Math.max(
+            resolvedTotal,
+            typeof progress.total === 'number' ? progress.total : 0
+          ),
           searchQuery: progress.searchQuery || searchQuery,
           sessionId: sessionInfo?.sessionId ?? progress.sessionId
         });
@@ -512,7 +540,7 @@ function App() {
                 <div className="text-right">
                   <div className="text-sm text-gray-500">Resultados encontrados</div>
                   <div className="text-xl font-semibold text-blue-600">
-                    {derivedFilteredCount}
+                    {Number(derivedFilteredCount).toLocaleString('pt-BR')}
                   </div>
                 </div>
               )}

@@ -251,6 +251,47 @@ export default function SearchForm({ onSearch, isLoading }) {
               )}
             </div>
 
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="lastUpdated" className="block text-sm font-medium text-gray-700 mb-2">
+                  Atualizado nos ultimos
+                </label>
+                <select
+                  id="lastUpdated"
+                  value={lastUpdated}
+                  onChange={(e) => setLastUpdated(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
+                  disabled={isLoading}
+                >
+                  {LAST_UPDATED_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Situacao do candidato</label>
+                <div className="flex flex-wrap gap-3">
+                  {CANDIDATE_SITUATIONS.map((option) => (
+                    <label key={option.id} className="flex items-center space-x-2 text-sm">
+                      <input
+                        type="radio"
+                        name="candidateSituation"
+                        value={option.id}
+                        checked={candidateSituation === option.id}
+                        onChange={(e) => setCandidateSituation(e.target.value)}
+                        className="text-primary-600"
+                        disabled={isLoading}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Pretensao salarial</label>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto">
@@ -360,45 +401,6 @@ export default function SearchForm({ onSearch, isLoading }) {
                     <span>
                       {area.label} {area.popular && '*'}
                     </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="lastUpdated" className="block text-sm font-medium text-gray-700 mb-2">
-                Atualizado nos ultimos
-              </label>
-              <select
-                id="lastUpdated"
-                value={lastUpdated}
-                onChange={(e) => setLastUpdated(e.target.value)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
-                disabled={isLoading}
-              >
-                {LAST_UPDATED_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Situacao do candidato</label>
-              <div className="flex space-x-4">
-                {CANDIDATE_SITUATIONS.map((option) => (
-                  <label key={option.id} className="flex items-center space-x-2 text-sm">
-                    <input
-                      type="radio"
-                      name="candidateSituation"
-                      value={option.id}
-                      checked={candidateSituation === option.id}
-                      onChange={(e) => setCandidateSituation(e.target.value)}
-                      className="text-primary-600"
-                      disabled={isLoading}
-                    />
-                    <span>{option.label}</span>
                   </label>
                 ))}
               </div>
