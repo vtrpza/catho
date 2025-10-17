@@ -16,7 +16,8 @@ export class ScraperState {
       profilesTotal: 0,
       filteredCount: null,
       startTime: null,
-      endTime: null
+      endTime: null,
+      searchQuery: this.searchQuery
     };
 
     this.errors = [];
@@ -135,6 +136,7 @@ export class ScraperState {
 
     return {
       ...this.progress,
+      sessionId: this.sessionId,
       duration,
       errorCount: this.errors.length,
       completionRate: this.progress.profilesTotal > 0

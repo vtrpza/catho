@@ -95,6 +95,14 @@ export class CathoScraper extends BaseScraper {
         await this.checkpointService.createCheckpoint(this.sessionId, searchQuery, options);
       }
 
+      this.emit('session', {
+        status: 'running',
+        query: searchQuery,
+        options,
+        resumed: Boolean(options.resumeSession),
+        sessionId: this.sessionId
+      });
+
       // Build search URL with filters
       const queryBuilder = new CathoQueryBuilder(searchQuery);
 

@@ -9,7 +9,7 @@ export class ResumeRepository {
   /**
    * Batch insert resumes
    */
-  async batchInsert(resumes) {
+  async batchInsert(resumes, sessionId = null) {
     if (!resumes || resumes.length === 0) return 0;
 
     try {
@@ -17,8 +17,8 @@ export class ResumeRepository {
 
       const stmt = await this.db.prepare(
         `INSERT OR REPLACE INTO resumes
-         (name, job_title, location, experience, summary, contact_email, contact_phone, profile_url, last_updated, search_query)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (name, job_title, location, experience, summary, contact_email, contact_phone, profile_url, last_updated, search_query, session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       );
 
       for (const resume of resumes) {
@@ -32,7 +32,8 @@ export class ResumeRepository {
           resume.contact_phone,
           resume.profile_url,
           resume.last_updated,
-          resume.search_query
+          resume.search_query,
+          sessionId ?? resume.session_id ?? null
         ]);
       }
 
@@ -56,8 +57,8 @@ export class ResumeRepository {
     try {
       const result = await this.db.run(
         `INSERT OR REPLACE INTO resumes
-         (name, job_title, location, experience, summary, contact_email, contact_phone, profile_url, last_updated, search_query)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (name, job_title, location, experience, summary, contact_email, contact_phone, profile_url, last_updated, search_query, session_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           resume.name,
           resume.job_title,
@@ -68,7 +69,8 @@ export class ResumeRepository {
           resume.contact_phone,
           resume.profile_url,
           resume.last_updated,
-          resume.search_query
+          resume.search_query,
+          resume.session_id ?? null
         ]
       );
 

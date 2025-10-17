@@ -50,6 +50,7 @@ const broadcast = (event, data) => {
 const bindScraperEvents = (scraper) => {
   if (!scraper) return () => {};
   const handlers = {
+    session: (payload) => broadcast('session', payload),
     progress: (payload) => broadcast('progress', payload),
     count: (payload) => broadcast('count', payload),
     resume: (payload) => broadcast('resume', payload),

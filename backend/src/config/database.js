@@ -31,6 +31,7 @@ export async function initDatabase() {
       last_updated TEXT,
       scraped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       search_query TEXT,
+      session_id TEXT,
 
       -- Dados pessoais expandidos
       age INTEGER,
@@ -60,6 +61,16 @@ export async function initDatabase() {
       scrape_status TEXT DEFAULT 'pending'
     )
   `);
+
+  const resumeColumns = await db.all('PRAGMA table_info(resumes)');
+  const hasSessionId = resumeColumns.some(column => column.name === 'session_id');
+
+  if (!hasSessionId) {
+    await db.exec(`
+      ALTER TABLE resumes ADD COLUMN session_id TEXT;
+    `);
+    console.log('✓ Coluna session_id adicionada à tabela resumes');
+  }
 
   // Tabela de experiências profissionais
   await db.exec(`
@@ -138,6 +149,7 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_full_profile_scraped ON resumes(full_profile_scraped);
     CREATE INDEX IF NOT EXISTS idx_scrape_status ON resumes(scrape_status);
     CREATE INDEX IF NOT EXISTS idx_scrape_attempts ON resumes(scrape_attempts);
+    CREATE INDEX IF NOT EXISTS idx_session_id ON resumes(session_id);
     CREATE INDEX IF NOT EXISTS idx_work_exp_resume_id ON work_experiences(resume_id);
     CREATE INDEX IF NOT EXISTS idx_education_resume_id ON education(resume_id);
     CREATE INDEX IF NOT EXISTS idx_courses_resume_id ON courses(resume_id);

@@ -4,13 +4,21 @@ const resumeService = new ResumeService();
 
 export const getResumes = async (req, res) => {
   try {
-    const { page = 1, limit = 20, search = '', searchQuery = '', includeRelated = 'false' } = req.query;
+    const {
+      page = 1,
+      limit = 20,
+      search = '',
+      searchQuery = '',
+      includeRelated = 'false',
+      sessionId = ''
+    } = req.query;
 
     const result = await resumeService.getAllResumes({
       page: parseInt(page),
       limit: parseInt(limit),
       search,
       searchQuery,
+      sessionId,
       includeRelated: includeRelated === 'true'
     });
 

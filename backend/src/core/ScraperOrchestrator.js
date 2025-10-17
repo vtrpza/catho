@@ -33,6 +33,8 @@ export class ScraperOrchestrator {
     this.state = null;
     this.errorCount = 0;
     this.lastRequestTime = 0;
+    this.sessionId = null;
+    this.searchQuery = null;
 
     // Event emitter (will be set by CathoScraper)
     this.emitter = null;
@@ -50,7 +52,11 @@ export class ScraperOrchestrator {
    */
   emit(event, data) {
     if (this.emitter) {
-      this.emitter.emit(event, data);
+      const payload =
+        data && typeof data === 'object' && !Array.isArray(data)
+          ? { sessionId: this.sessionId, ...data }
+          : { sessionId: this.sessionId, data };
+      this.emitter.emit(event, payload);
     }
   }
 
@@ -59,6 +65,8 @@ export class ScraperOrchestrator {
    */
   async orchestrate(sessionId, searchQuery, searchUrl, options) {
     // Initialize state
+    this.sessionId = sessionId;
+    this.searchQuery = searchQuery;
     this.state = new ScraperState(sessionId, searchQuery, options);
     this.state.start();
 
@@ -75,7 +83,11 @@ export class ScraperOrchestrator {
       const page = this.auth.getPage();
 
       // Navigate to search page
-      this.emit('navigation', { action: 'navigating_to_search', url: searchUrl });
+      this.emit('navigation', {
+        action: 'navigating_to_search',
+        url: searchUrl,
+        searchQuery: this.searchQuery
+      });
       const navResult = await this.navigator.goToSearch(page, searchUrl, 1);
 
       if (!navResult.success) {
@@ -89,7 +101,11 @@ export class ScraperOrchestrator {
       if (totalResults > 0) {
         console.log(`📊 Total results found: ${totalResults}`);
         this.state.setFilteredCount(totalResults);
-        this.emit('count', { total: totalResults, filtered: totalResults });
+        this.emit('count', {
+          total: totalResults,
+          filtered: totalResults,
+          searchQuery: this.searchQuery
+        });
       }
 
       // Iterate through pages
@@ -100,7 +116,8 @@ export class ScraperOrchestrator {
         this.emit('page', {
           currentPage: pageNum,
           totalPages: maxPages,
-          progress: this.state.getProgress()
+          progress: this.state.getProgress(),
+          searchQuery: this.searchQuery
         });
 
         try {
@@ -112,17 +129,22 @@ export class ScraperOrchestrator {
             break;
           }
 
+          const resumesWithSession = pageResumes.map(resume => ({
+            ...resume,
+            session_id: this.sessionId
+          }));
+
           // Save basic resume data
-          await this.resumeRepo.batchInsert(pageResumes);
+          await this.resumeRepo.batchInsert(resumesWithSession, this.sessionId);
 
           // Add resume URLs to state and task queue
-          pageResumes.forEach(resume => {
+          resumesWithSession.forEach(resume => {
             if (resume.profile_url) {
               this.state.addResumeUrl(resume.profile_url);
               this.taskQueue.addTasks([resume.profile_url]);
 
               // Emit resume event
-              this.emit('resume', { resume });
+              this.emit('resume', { resume, searchQuery: this.searchQuery });
             }
           });
 
@@ -179,7 +201,11 @@ export class ScraperOrchestrator {
         } catch (error) {
           console.error(`❌ Error processing page ${pageNum}:`, error.message);
           this.errorCount++;
-          this.emit('error', { message: error.message, page: pageNum });
+          this.emit('error', {
+            message: error.message,
+            page: pageNum,
+            searchQuery: this.searchQuery
+          });
           break;
         }
       }
@@ -189,7 +215,8 @@ export class ScraperOrchestrator {
       this.emit('done', {
         total: this.state.progress.resumesScraped,
         profilesScraped: this.state.progress.profilesScraped,
-        duration: this.state.getProgress().duration
+        duration: this.state.getProgress().duration,
+        searchQuery: this.searchQuery
       });
 
       console.log(`\n✅ Scraping completed! Total: ${this.state.progress.resumesScraped} resumes`);
@@ -203,7 +230,7 @@ export class ScraperOrchestrator {
 
     } catch (error) {
       this.state.fail(error);
-      this.emit('error', { message: error.message });
+      this.emit('error', { message: error.message, searchQuery: this.searchQuery });
       console.error('❌ Error during orchestration:', error);
       throw error;
     }
@@ -243,11 +270,19 @@ export class ScraperOrchestrator {
     const strategyContext = {
       ...context,
       onProfile: (data) => {
-        this.emit('profile', data);
+        const payload = {
+          ...data,
+          searchQuery: this.searchQuery
+        };
+        this.emit('profile', payload);
         this.emit('progress', this.state.getProgress());
       },
       onError: (data) => {
-        this.emit('error', data);
+        const payload = {
+          ...data,
+          searchQuery: this.searchQuery
+        };
+        this.emit('error', payload);
       }
     };
 

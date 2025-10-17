@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import SearchForm from './components/SearchForm';
 import ProgressIndicator from './components/ProgressIndicator';
 import ResumeTable from './components/ResumeTable';
@@ -8,45 +8,103 @@ import ExportButtons from './components/ExportButtons';
 import Toast from './components/Toast';
 import { scraperAPI, resumeAPI } from './services/api';
 
+const DEFAULT_PROGRESS = {
+  status: 'idle',
+  scraped: 0,
+  currentPage: 0,
+  total: 0,
+  profilesScraped: 0,
+  profilesTotal: 0,
+  completionRate: 0,
+  errorCount: 0,
+  sessionId: null,
+  searchQuery: '',
+  duration: 0
+};
+
 function App() {
   const [resumes, setResumes] = useState([]);
   const [pagination, setPagination] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isLoading, setIsLoading] = useState(false);
   const [isScraping, setIsScraping] = useState(false);
-  const [progress, setProgress] = useState({
-    status: 'idle',
-    scraped: 0,
-    currentPage: 0,
-    total: 0
-  });
+  const [progress, setProgress] = useState(DEFAULT_PROGRESS);
   const [toast, setToast] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState('cards'); // 'cards' or 'table'
   const [filteredCount, setFilteredCount] = useState(null);
+  const [sessionInfo, setSessionInfo] = useState(null);
+  const [streamStatus, setStreamStatus] = useState('idle'); // idle | connecting | open | closed | error
   const eventSourceRef = useRef(null);
 
-  const closeStream = () => {
+  const closeStream = useCallback((nextStatus = 'idle') => {
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
       eventSourceRef.current = null;
     }
-  };
+    setStreamStatus(nextStatus);
+  }, []);
 
   useEffect(() => {
     return () => {
-      closeStream();
+      closeStream('idle');
     };
+  }, [closeStream]);
+
+  const updateProgress = useCallback((partial = {}) => {
+    setProgress((previous) => {
+      const next = { ...previous };
+      Object.entries(partial).forEach(([key, value]) => {
+        if (value !== undefined) {
+          next[key] = value;
+        }
+      });
+      return next;
+    });
   }, []);
+
+  const handleProgressUpdate = useCallback((payload = {}) => {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
+    updateProgress(payload);
+
+    const totalValue =
+      typeof payload.filteredCount === 'number'
+        ? payload.filteredCount
+        : typeof payload.total === 'number'
+          ? payload.total
+          : null;
+
+    if (totalValue !== null) {
+      setFilteredCount(totalValue);
+    }
+  }, [updateProgress]);
 
   const mergeResume = (incoming) => {
     if (!incoming || !incoming.profile_url) {
       return;
     }
 
+    const normalizedResume = {
+      ...incoming,
+      session_id:
+        incoming.session_id ??
+        incoming.sessionId ??
+        sessionInfo?.sessionId ??
+        progress.sessionId ??
+        null,
+      search_query:
+        incoming.search_query ??
+        incoming.searchQuery ??
+        sessionInfo?.query ??
+        progress.searchQuery ??
+        searchQuery
+    };
+
     setResumes((previous) => {
       const index = previous.findIndex(
-        (item) => item.profile_url === incoming.profile_url
+        (item) => item.profile_url === normalizedResume.profile_url
       );
 
       let next;
@@ -54,23 +112,24 @@ function App() {
         next = [...previous];
         next[index] = {
           ...next[index],
-          ...incoming,
+          ...normalizedResume,
           __live: true
         };
       } else {
         next = [
           {
-            ...incoming,
+            ...normalizedResume,
             __live: true
           },
           ...previous
         ];
       }
 
-      setProgress((state) => ({
-        ...state,
-        scraped: next.length
-      }));
+      updateProgress({
+        scraped: next.length,
+        sessionId: normalizedResume.session_id ?? progress.sessionId,
+        searchQuery: normalizedResume.search_query ?? progress.searchQuery
+      });
 
       return next;
     });
@@ -113,10 +172,7 @@ function App() {
           const response = await scraperAPI.getStatus();
           const { isRunning, progress: currentProgress } = response.data;
 
-          setProgress((previous) => ({
-            ...previous,
-            ...currentProgress
-          }));
+          handleProgressUpdate(currentProgress);
 
           if (!isRunning && currentProgress.status === 'completed') {
             setIsScraping(false);
@@ -135,26 +191,34 @@ function App() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [isScraping]);
+  }, [isScraping, handleProgressUpdate]);
 
   const loadResumes = async (page = 1) => {
     try {
       setIsLoading(true);
-      const response = await resumeAPI.getResumes({
+      const params = {
         page,
         limit: 20,
         searchQuery
-      });
+      };
+
+      if (sessionInfo?.sessionId) {
+        params.sessionId = sessionInfo.sessionId;
+      }
+
+      const response = await resumeAPI.getResumes(params);
 
       setResumes(response.data.resumes);
       setPagination(response.data.pagination);
       setCurrentPage(page);
-      if (!isScraping && typeof response.data.pagination?.total === 'number') {
-        setFilteredCount(response.data.pagination.total);
-        setProgress((previous) => ({
-          ...previous,
-          total: response.data.pagination.total
-        }));
+      const resolvedTotal = response.data.pagination?.total;
+      if (typeof resolvedTotal === 'number') {
+        setFilteredCount(resolvedTotal);
+        updateProgress({
+          total: resolvedTotal,
+          searchQuery: progress.searchQuery || searchQuery,
+          sessionId: sessionInfo?.sessionId ?? progress.sessionId
+        });
       }
     } catch (error) {
       console.error('Erro ao carregar currículos:', error);
@@ -165,7 +229,8 @@ function App() {
   };
 
   const startStream = () => {
-    closeStream();
+    closeStream('idle');
+    setStreamStatus('connecting');
 
     let eventSource;
 
@@ -173,6 +238,8 @@ function App() {
       eventSource = scraperAPI.createStream();
     } catch (error) {
       console.error('Erro ao criar stream:', error);
+      setStreamStatus('error');
+      showToast('Não foi possível conectar ao stream de progresso', 'error');
       return;
     }
 
@@ -188,31 +255,74 @@ function App() {
       }
     };
 
+    const handleStreamFailure = (message) => {
+      setIsScraping(false);
+      closeStream('error');
+      if (message) {
+        showToast(message, 'error');
+      }
+      loadResumes(1);
+    };
+
+    eventSource.onopen = () => {
+      setStreamStatus('open');
+    };
+
+    eventSource.onerror = () => {
+      setStreamStatus((previous) => (previous === 'error' ? previous : 'error'));
+    };
+
+    eventSource.addEventListener('session', (event) => {
+      const payload = parsePayload(event);
+      if (!payload) return;
+
+      setSessionInfo({
+        sessionId: payload.sessionId || payload.session_id || null,
+        query: payload.query || payload.searchQuery || searchQuery,
+        resumed: Boolean(payload.resumed),
+        options: payload.options || {}
+      });
+
+      handleProgressUpdate({
+        sessionId: payload.sessionId || payload.session_id || null,
+        searchQuery: payload.query || payload.searchQuery || searchQuery,
+        status: payload.status || 'running'
+      });
+    });
+
     eventSource.addEventListener('progress', (event) => {
       const payload = parsePayload(event);
       if (payload) {
-        setProgress((previous) => ({
-          ...previous,
-          ...payload
-        }));
+        handleProgressUpdate(payload);
+      }
+    });
+
+    eventSource.addEventListener('page', (event) => {
+      const payload = parsePayload(event);
+      if (!payload) return;
+
+      if (payload.progress) {
+        handleProgressUpdate(payload.progress);
+      } else {
+        handleProgressUpdate(payload);
       }
     });
 
     eventSource.addEventListener('count', (event) => {
       const payload = parsePayload(event);
-      if (payload && typeof payload.total === 'number') {
-        setFilteredCount(payload.total);
-        setProgress((previous) => ({
-          ...previous,
-          total: payload.total
-        }));
+      if (payload) {
+        handleProgressUpdate(payload);
       }
     });
 
     eventSource.addEventListener('resume', (event) => {
       const payload = parsePayload(event);
       if (payload && payload.resume) {
-        mergeResume(payload.resume);
+        mergeResume({
+          ...payload.resume,
+          session_id: payload.sessionId ?? payload.resume.session_id,
+          search_query: payload.searchQuery ?? payload.resume.search_query
+        });
       }
     });
 
@@ -223,77 +333,82 @@ function App() {
       }
     });
 
+    eventSource.addEventListener('navigation', (event) => {
+      const payload = parsePayload(event);
+      if (payload) {
+        handleProgressUpdate({ currentPage: payload.currentPage, sessionId: payload.sessionId });
+      }
+    });
+
     eventSource.addEventListener('done', (event) => {
       const payload = parsePayload(event) || {};
-      if (typeof payload.total === 'number') {
-        setFilteredCount(payload.total);
-      }
-      setProgress((previous) => ({
-        ...previous,
-        status: 'completed',
-        total: payload.total ?? previous.total
-      }));
+      handleProgressUpdate({
+        ...payload,
+        status: 'completed'
+      });
       setIsScraping(false);
-      closeStream();
+      closeStream('closed');
       showToast('Coleta concluída com sucesso!', 'success');
       loadResumes(1);
     });
 
-    const handleStreamFailure = (message) => {
-      setIsScraping(false);
-      closeStream();
-      if (message) {
-        showToast(message, 'error');
-      }
-      loadResumes(1);
-    };
-
     eventSource.addEventListener('error', (event) => {
       const payload = parsePayload(event);
+      if (payload) {
+        handleProgressUpdate({
+          ...payload,
+          status: payload.status || 'error'
+        });
+      }
       handleStreamFailure(payload?.message || 'Erro durante a coleta');
     });
 
     eventSource.addEventListener('stopped', (event) => {
       const payload = parsePayload(event);
-      if (payload && payload.status === 'completed') {
-        setProgress((previous) => ({
-          ...previous,
-          status: 'completed'
-        }));
+      if (payload) {
+        handleProgressUpdate(payload);
       }
-      handleStreamFailure(payload?.message || null);
-    });
 
-    eventSource.onerror = () => {
-      console.warn('Conexão SSE encerrada');
-    };
+      setIsScraping(false);
+
+      if (payload?.status === 'completed') {
+        closeStream('closed');
+        loadResumes(1);
+        if (payload?.message) {
+          showToast(payload.message, 'info');
+        }
+      } else {
+        handleStreamFailure(payload?.message || 'Coleta interrompida');
+      }
+    });
   };
 
   const handleSearch = async (searchParams) => {
     try {
-      closeStream();
+      closeStream('idle');
       setIsScraping(true);
       setSearchQuery(searchParams.query);
+      setSessionInfo(null);
+      setFilteredCount(null);
+      setPagination(null);
+      setResumes([]);
+      setProgress({
+        ...DEFAULT_PROGRESS,
+        status: 'running',
+        searchQuery: searchParams.query
+      });
 
       const response = await scraperAPI.startScrape(searchParams.query, searchParams);
 
       if (response.data.success) {
         showToast('Coleta iniciada!', 'success');
-        setFilteredCount(null);
-        setResumes([]);
-        setPagination(null);
-        setProgress({
-          status: 'running',
-          scraped: 0,
-          currentPage: 0,
-          total: 0
-        });
+        setStreamStatus('connecting');
         startStream();
       }
     } catch (error) {
       console.error('Erro ao iniciar busca:', error);
       setIsScraping(false);
-      closeStream();
+      closeStream('error');
 
       if (error.response?.status === 409) {
         showToast('Já existe uma coleta em andamento', 'warning');
@@ -359,19 +474,16 @@ function App() {
 
     try {
       setIsLoading(true);
-      closeStream();
+      closeStream('idle');
       await resumeAPI.clearAllData();
       showToast('Todos os dados foram excluídos com sucesso!', 'success');
 
       // Recarregar a lista
       await loadResumes(1);
       setFilteredCount(null);
-      setProgress({
-        status: 'idle',
-        scraped: 0,
-        currentPage: 0,
-        total: 0
-      });
+      setSessionInfo(null);
+      setProgress({ ...DEFAULT_PROGRESS });
+      setStreamStatus('idle');
 
     } catch (error) {
       console.error('Erro ao limpar dados:', error);
@@ -435,7 +547,12 @@ function App() {
           isLoading={isScraping}
         />
 
-        <ProgressIndicator progress={progress} isRunning={isScraping} />
+        <ProgressIndicator
+          progress={progress}
+          isRunning={isScraping}
+          streamStatus={streamStatus}
+          session={sessionInfo}
+        />
 
         {/* Statistics Cards */}
         {resumes.length > 0 && (

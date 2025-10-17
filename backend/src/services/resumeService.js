@@ -4,7 +4,14 @@ import XLSX from 'xlsx';
 export class ResumeService {
   async getAllResumes(options = {}) {
     const db = getDatabase();
-    const { page = 1, limit = 20, search = '', searchQuery = '', includeRelated = false } = options;
+    const {
+      page = 1,
+      limit = 20,
+      search = '',
+      searchQuery = '',
+      sessionId = '',
+      includeRelated = false
+    } = options;
     const offset = (page - 1) * limit;
 
     let query = 'SELECT * FROM resumes WHERE 1=1';
@@ -19,6 +26,11 @@ export class ResumeService {
     if (searchQuery) {
       query += ' AND search_query = ?';
       params.push(searchQuery);
+    }
+
+    if (sessionId) {
+      query += ' AND session_id = ?';
+      params.push(sessionId);
     }
 
     query += ' ORDER BY scraped_at DESC LIMIT ? OFFSET ?';
@@ -46,6 +58,11 @@ export class ResumeService {
     if (searchQuery) {
       countQuery += ' AND search_query = ?';
       countParams.push(searchQuery);
+    }
+
+    if (sessionId) {
+      countQuery += ' AND session_id = ?';
+      countParams.push(sessionId);
     }
 
     const { total } = await db.get(countQuery, countParams);
