@@ -471,9 +471,17 @@ export class PageNavigator {
       }
 
       const radios = Array.from(content.querySelectorAll(`input[type="radio"][name="${inputName}"]`));
-      const target = radios.find((radio) => String(radio.value) === String(targetValue));
+      const target = radios.find((radio) => {
+        const value = radio.value || radio.getAttribute('data-value') || radio.getAttribute('id');
+        return String(value) === String(targetValue);
+      });
       if (target && !target.checked) {
-        target.click();
+        const label = target.closest('label');
+        if (label) {
+          label.click();
+        } else {
+          target.click();
+        }
       }
     }, { title: sectionTitle, inputName, targetValue });
   }
