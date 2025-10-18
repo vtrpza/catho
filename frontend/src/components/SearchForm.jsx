@@ -109,9 +109,8 @@ const PERFORMANCE_MODES = [
 
 export default function SearchForm({ onSearch, isLoading }) {
   const [query, setQuery] = useState('');
-  const [maxPages, setMaxPages] = useState(10);
   const [limitPages, setLimitPages] = useState(false);
-  const [delay, setDelay] = useState(2000);
+  const [maxPages, setMaxPages] = useState(10);
   const [goalMode, setGoalMode] = useState('all'); // 'all' | 'target'
   const [targetProfiles, setTargetProfiles] = useState('2000');
   const [performanceMode, setPerformanceMode] = useState('balanced');
@@ -130,9 +129,6 @@ export default function SearchForm({ onSearch, isLoading }) {
   const [candidateSituation, setCandidateSituation] = useState('indifferent');
   const [disabilityStatus, setDisabilityStatus] = useState('indifferent');
   const [lastUpdated, setLastUpdated] = useState('indifferent');
-
-  const [enableParallel, setEnableParallel] = useState(true);
-  const [concurrency, setConcurrency] = useState(3);
 
   const toggleCheckbox = (value, list, setter) => {
     if (list.includes(value)) {
@@ -174,16 +170,7 @@ export default function SearchForm({ onSearch, isLoading }) {
     const params = {
       ...filters,
       performanceMode,
-      enableParallel,
-      concurrency,
-      delay,
-      targetProfilesPerMin: targetProfilesPerMinute,
-      advanced: {
-        delay,
-        enableParallel,
-        concurrency,
-        goalMode
-      }
+      targetProfilesPerMin: targetProfilesPerMinute
     };
 
     if (limitPages && maxPages > 0) {
@@ -473,7 +460,7 @@ export default function SearchForm({ onSearch, isLoading }) {
             disabled={isLoading}
           >
             <span className="font-medium text-gray-700">
-              Filtros e ajustes avancados {activeFiltersCount > 0 && `(${activeFiltersCount})`}
+              Filtros avancados {activeFiltersCount > 0 && `(${activeFiltersCount})`}
             </span>
             <span>{showAdvanced ? '-' : '+'}</span>
           </button>
@@ -669,70 +656,6 @@ export default function SearchForm({ onSearch, isLoading }) {
               </div>
             </div>
 
-            <div className="border-t border-gray-300 pt-4 mt-4">
-              <h4 className="font-semibold text-gray-700 mb-3">Configuracoes avancadas de performance</h4>
-
-              <div className="mb-3">
-                <label className="flex items-center space-x-3">
-                  <input
-                    type="checkbox"
-                    checked={enableParallel}
-                    onChange={(e) => setEnableParallel(e.target.checked)}
-                    className="rounded text-primary-600 h-5 w-5"
-                    disabled={isLoading}
-                  />
-                  <div>
-                    <span className="font-medium text-gray-700">Processamento paralelo</span>
-                    <p className="text-xs text-gray-500">
-                      Ate 5x mais rapido (analisa varios perfis ao mesmo tempo)
-                    </p>
-                  </div>
-                </label>
-              </div>
-
-              {enableParallel && (
-                <div>
-                  <label htmlFor="concurrency" className="block text-sm font-medium text-gray-700 mb-2">
-                    Numero de workers paralelos
-                  </label>
-                  <select
-                    id="concurrency"
-                    value={concurrency}
-                    onChange={(e) => setConcurrency(parseInt(e.target.value, 10))}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
-                    disabled={isLoading}
-                  >
-                    <option value={2}>2 workers (conservador)</option>
-                    <option value={3}>3 workers (recomendado)</option>
-                    <option value={4}>4 workers (rapido)</option>
-                    <option value={5}>5 workers (muito rapido)</option>
-                  </select>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Mais workers = mais rapido, mas aumenta o risco de bloqueio
-                  </p>
-                </div>
-              )}
-
-              <div className="mt-3">
-                <label htmlFor="delay" className="block text-sm font-medium text-gray-700 mb-2">
-                  Intervalo entre páginas (ms)
-                </label>
-                <input
-                  type="number"
-                  id="delay"
-                  value={delay}
-                  onChange={(e) => setDelay(parseInt(e.target.value, 10) || 1000)}
-                  min="1000"
-                  max="15000"
-                  step="500"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  disabled={isLoading}
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Valores menores aceleram a navegação entre páginas, mas podem aumentar o risco de bloqueio.
-                </p>
-              </div>
-            </div>
           </div>
         )}
 
