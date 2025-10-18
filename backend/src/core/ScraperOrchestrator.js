@@ -71,7 +71,7 @@ export class ScraperOrchestrator {
     this.state.start();
 
     const {
-      maxPages = 5,
+      maxPages,
       delay = 2000,
       scrapeFullProfiles = true,
       profileDelay = 2500,
@@ -114,19 +114,31 @@ export class ScraperOrchestrator {
         });
       }
 
-      // Iterate through pages
-      for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
-        this.state.setCurrentPage(pageNum);
-        console.log(`\n📄 Processing page ${pageNum}/${maxPages}...`);
+      const hasPageLimit = typeof maxPages === 'number' && maxPages > 0;
+      const effectivePageCap = hasPageLimit ? maxPages : Number.POSITIVE_INFINITY;
+      let currentPage = 1;
+      let consecutiveStalledPages = 0;
+      const maxStalledPages = 2;
+
+      this.state.setTotalPages(hasPageLimit ? maxPages : 0);
+
+      while (currentPage <= effectivePageCap) {
+        this.state.setCurrentPage(currentPage);
+        console.log(`\n📄 Processing page ${currentPage}${Number.isFinite(effectivePageCap) ? `/${effectivePageCap}` : ''}...`);
+
+        const currentProgress = this.state.getProgress();
 
         this.emit('page', {
-          currentPage: pageNum,
-          totalPages: maxPages,
-          progress: this.state.getProgress(),
+          currentPage,
+          totalPages: hasPageLimit ? effectivePageCap : currentProgress.totalPages,
+          progress: currentProgress,
           searchQuery: this.searchQuery
         });
 
         try {
+          const progressBeforeExtraction = this.state.getProgress();
+          const previousUniqueCount = progressBeforeExtraction.resumesScraped || 0;
+
           // Extract resumes from current page
           const pageResumes = await this.listingExtractor.extract(page, { searchQuery });
 
@@ -157,7 +169,35 @@ export class ScraperOrchestrator {
           console.log(`✓ Collected ${pageResumes.length} resumes from this page`);
           console.log(`📈 Total collected so far: ${this.state.progress.resumesScraped}`);
 
-          this.emit('progress', this.state.getProgress());
+          const updatedProgress = this.state.getProgress();
+          this.emit('progress', updatedProgress);
+
+          const newUniqueCount = (updatedProgress.resumesScraped || 0) - previousUniqueCount;
+          consecutiveStalledPages = newUniqueCount > 0 ? 0 : consecutiveStalledPages + 1;
+
+          if (totalResults > 0 && pageResumes.length > 0 && !hasPageLimit) {
+            const estimatedTotalPages = Math.ceil(totalResults / pageResumes.length);
+            if (estimatedTotalPages > 0) {
+              this.state.setTotalPages(estimatedTotalPages);
+            }
+          }
+
+          if (this.checkpointService && this.sessionId) {
+            try {
+              await this.checkpointService.updateCheckpoint(this.sessionId, {
+                currentPage,
+                profilesScraped: updatedProgress.resumesScraped || 0,
+                errorCount: this.errorCount
+              });
+            } catch (checkpointError) {
+              console.warn('⚠️ Failed to update checkpoint:', checkpointError.message);
+            }
+          }
+
+          if (consecutiveStalledPages >= maxStalledPages) {
+            console.log('ℹ️ No new resumes detected in consecutive pages. Stopping to avoid loops.');
+            break;
+          }
 
           // Scrape full profiles if enabled
           if (scrapeFullProfiles && pageResumes.length > 0) {
@@ -170,46 +210,75 @@ export class ScraperOrchestrator {
 
               // Choose strategy based on settings
               const shouldUseParallel = enableParallel && profileUrls.length >= 3;
-              await this.scrapeProfiles(profileUrls, shouldUseParallel, {
+              const profileContext = {
                 page,
                 concurrency,
                 profileDelay,
-                searchQuery
-              });
+                searchQuery,
+                browser: this.auth.browser
+              };
 
-              // Return to search page
-              console.log(`  🔙 Returning to search page...`);
-              await this.navigator.goToSearch(page, searchUrl, pageNum + 1).catch(() => {});
+              let sequentialWorkerPage = null;
+
+              if (!shouldUseParallel && this.auth.browser) {
+                try {
+                  sequentialWorkerPage = await this.auth.browser.newPage();
+                  await this.auth.preparePage(sequentialWorkerPage);
+                  await this.auth.applySessionTo(sequentialWorkerPage);
+                  profileContext.page = sequentialWorkerPage;
+                } catch (workerError) {
+                  console.warn('⚠️ Could not create dedicated profile page:', workerError.message);
+                  if (sequentialWorkerPage) {
+                    await sequentialWorkerPage.close().catch(() => {});
+                    sequentialWorkerPage = null;
+                  }
+                  profileContext.page = page;
+                }
+              }
+
+              try {
+                await this.scrapeProfiles(profileUrls, shouldUseParallel, profileContext);
+              } finally {
+                if (sequentialWorkerPage) {
+                  await sequentialWorkerPage.close().catch(() => {});
+                } else if (!shouldUseParallel) {
+                  // Fallback to ensure search page is restored when using main page for profiles
+                  await this.navigator.goToSearch(page, searchUrl, currentPage).catch(() => {});
+                }
+              }
             }
           }
 
-          // Check for next page
-          if (pageNum < maxPages) {
-            const hasNext = await this.navigator.hasNextPage(page);
-
-            if (!hasNext) {
-              console.log('ℹ️ No more pages available');
-              break;
-            }
-
-            // Navigate to next page
-            const adaptivePageDelay = getAdaptiveDelay(delay, this.errorCount, this.lastRequestTime);
-            await humanizedWait(page, adaptivePageDelay, 0.35);
-            await simulateHumanBehavior(page);
-
-            const nextResult = await this.navigator.goToNextPage(page);
-            if (!nextResult.success) {
-              console.log('ℹ️ Could not navigate to next page');
-              break;
-            }
+          if (currentPage >= effectivePageCap) {
+            console.log('ℹ️ Page limit reached. Finishing...');
+            break;
           }
+
+          const hasNext = await this.navigator.hasNextPage(page);
+
+          if (!hasNext) {
+            console.log('ℹ️ No more pages available');
+            break;
+          }
+
+          const adaptivePageDelay = getAdaptiveDelay(delay, this.errorCount, this.lastRequestTime);
+          await humanizedWait(page, adaptivePageDelay, 0.35);
+          await simulateHumanBehavior(page);
+
+          const nextResult = await this.navigator.goToNextPage(page);
+          if (!nextResult.success) {
+            console.log('ℹ️ Could not navigate to next page');
+            break;
+          }
+
+          currentPage++;
 
         } catch (error) {
-          console.error(`❌ Error processing page ${pageNum}:`, error.message);
+          console.error(`❌ Error processing page ${currentPage}:`, error.message);
           this.errorCount++;
           this.emit('error', {
             message: error.message,
-            page: pageNum,
+            page: currentPage,
             searchQuery: this.searchQuery
           });
           break;

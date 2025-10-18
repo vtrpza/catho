@@ -87,7 +87,8 @@ const LAST_UPDATED_OPTIONS = [
 
 export default function SearchForm({ onSearch, isLoading }) {
   const [query, setQuery] = useState('');
-  const [maxPages, setMaxPages] = useState(5);
+  const [maxPages, setMaxPages] = useState(10);
+  const [limitPages, setLimitPages] = useState(false);
   const [delay, setDelay] = useState(2000);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -115,11 +116,14 @@ export default function SearchForm({ onSearch, isLoading }) {
   const buildSearchParams = () => {
     const params = {
       query: query.trim(),
-      maxPages,
       delay,
       enableParallel,
       concurrency
     };
+
+    if (limitPages && maxPages > 0) {
+      params.maxPages = maxPages;
+    }
 
     if (salaryRanges.length > 0) params.salaryRanges = salaryRanges;
     if (ageRanges.length > 0) params.ageRanges = ageRanges;
@@ -187,21 +191,47 @@ export default function SearchForm({ onSearch, isLoading }) {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label htmlFor="maxPages" className="block text-sm font-medium text-gray-700 mb-2">
-              Numero de paginas
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Alcance da busca
             </label>
-            <input
-              type="number"
-              id="maxPages"
-              value={maxPages}
-              onChange={(e) => setMaxPages(parseInt(e.target.value, 10) || 1)}
-              min="1"
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              disabled={isLoading}
-            />
-            <p className="text-xs text-gray-500 mt-1">
-              Sem limite - colete quantas paginas precisar
-            </p>
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                id="limitPages"
+                checked={limitPages}
+                onChange={(e) => setLimitPages(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded text-primary-600 focus:ring-primary-500"
+                disabled={isLoading}
+              />
+              <div className="flex-1">
+                <label htmlFor="limitPages" className="font-medium text-gray-800">
+                  Limitar numero de paginas
+                </label>
+                <p className="text-xs text-gray-500">
+                  Desmarcado: coleta todas as paginas disponiveis (padrao recomendado).
+                </p>
+                {limitPages ? (
+                  <div className="mt-3">
+                    <input
+                      type="number"
+                      id="maxPages"
+                      value={maxPages}
+                      onChange={(e) => setMaxPages(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      min="1"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      disabled={isLoading}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Ideal para testes rapidos. Valor minimo: 1 pagina.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-gray-600">
+                    Vamos percorrer todas as paginas retornadas pelo Catho ate o fim dos resultados.
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           <div>

@@ -43,94 +43,108 @@ export class PageNavigator {
   /**
    * Check if there's a next page
    */
-  async hasNextPage(page) {
-    try {
-      const hasNext = await page.evaluate(() => {
-        // Try different strategies to find next page button
+  async hasNextPage(page, attempts = 2) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const hasNext = await page.evaluate(() => {
+          // Try different strategies to find next page button
 
-        // 1. By rel="next" attribute
-        let btn = document.querySelector('a[rel="next"]');
-        if (btn && !btn.classList.contains('disabled')) return true;
+          // 1. By rel="next" attribute
+          let btn = document.querySelector('a[rel="next"]');
+          if (btn && !btn.classList.contains('disabled')) return true;
 
-        // 2. By pagination classes
-        btn = document.querySelector('.pagination .next:not(.disabled)');
-        if (btn) return true;
+          // 2. By pagination classes
+          btn = document.querySelector('.pagination .next:not(.disabled)');
+          if (btn) return true;
 
-        // 3. By button text
-        const buttons = Array.from(document.querySelectorAll('button, a'));
-        btn = buttons.find(b => {
-          const text = b.textContent.toLowerCase().trim();
-          return (text.includes('próxim') || text.includes('next') || text === '>') &&
-                 !b.disabled &&
-                 !b.classList.contains('disabled') &&
-                 b.getAttribute('aria-disabled') !== 'true';
+          // 3. By button text
+          const buttons = Array.from(document.querySelectorAll('button, a'));
+          btn = buttons.find(b => {
+            const text = (b.textContent || '').toLowerCase().trim();
+            return (text.includes('próxim') || text.includes('next') || text === '>') &&
+                   !b.disabled &&
+                   !b.classList.contains('disabled') &&
+                   b.getAttribute('aria-disabled') !== 'true';
+          });
+
+          return !!btn;
         });
 
-        return !!btn;
-      });
+        this.hasMore = hasNext;
+        if (hasNext || attempt === attempts - 1) {
+          return hasNext;
+        }
+      } catch (error) {
+        console.error('❌ Error checking for next page:', error.message);
+        this.hasMore = false;
+        return false;
+      }
 
-      this.hasMore = hasNext;
-      return hasNext;
-    } catch (error) {
-      console.error('❌ Error checking for next page:', error.message);
-      this.hasMore = false;
-      return false;
+      await page.waitForTimeout(750);
     }
+
+    this.hasMore = false;
+    return false;
   }
 
   /**
    * Go to next page
    */
-  async goToNextPage(page) {
-    try {
-      const nextButton = await page.evaluateHandle(() => {
-        // Try different strategies to find next page button
+  async goToNextPage(page, attempts = 2) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        const nextButton = await page.evaluateHandle(() => {
+          // Try different strategies to find next page button
 
-        // 1. By rel="next" attribute
-        let btn = document.querySelector('a[rel="next"]');
-        if (btn && !btn.classList.contains('disabled')) return btn;
+          // 1. By rel="next" attribute
+          let btn = document.querySelector('a[rel="next"]');
+          if (btn && !btn.classList.contains('disabled')) return btn;
 
-        // 2. By pagination classes
-        btn = document.querySelector('.pagination .next:not(.disabled)');
-        if (btn) return btn;
+          // 2. By pagination classes
+          btn = document.querySelector('.pagination .next:not(.disabled)');
+          if (btn) return btn;
 
-        // 3. By button text
-        const buttons = Array.from(document.querySelectorAll('button, a'));
-        btn = buttons.find(b => {
-          const text = b.textContent.toLowerCase().trim();
-          return (text.includes('próxim') || text.includes('next') || text === '>') &&
-                 !b.disabled &&
-                 !b.classList.contains('disabled') &&
-                 b.getAttribute('aria-disabled') !== 'true';
+          // 3. By button text
+          const buttons = Array.from(document.querySelectorAll('button, a'));
+          btn = buttons.find(b => {
+            const text = (b.textContent || '').toLowerCase().trim();
+            return (text.includes('próxim') || text.includes('next') || text === '>') &&
+                   !b.disabled &&
+                   !b.classList.contains('disabled') &&
+                   b.getAttribute('aria-disabled') !== 'true';
+          });
+
+          return btn || null;
         });
 
-        return btn || null;
-      });
+        const buttonExists = nextButton
+          ? await page.evaluate(btn => btn !== null, nextButton)
+          : false;
 
-      const buttonExists = await page.evaluate(btn => btn !== null, nextButton);
+        if (!buttonExists) {
+          this.hasMore = false;
+          return { success: false, reason: 'no_next_button' };
+        }
 
-      if (!buttonExists) {
-        this.hasMore = false;
-        return { success: false, reason: 'no_next_button' };
+        await Promise.all([
+          nextButton.click(),
+          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
+        ]);
+
+        await page.waitForTimeout(1000);
+
+        this.currentPage++;
+        this.hasMore = true;
+        return { success: true };
+
+      } catch (error) {
+        console.error(`❌ Error going to next page (attempt ${attempt + 1}):`, error.message);
+        await page.waitForTimeout(1000 * (attempt + 1));
       }
-
-      // Click next page button
-      await Promise.all([
-        nextButton.click(),
-        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
-      ]);
-
-      // Wait after navigation
-      await page.waitForTimeout(1000);
-
-      this.currentPage++;
-      return { success: true };
-
-    } catch (error) {
-      console.error('❌ Error going to next page:', error.message);
-      this.hasMore = false;
-      return { success: false, error: error.message };
     }
+
+    this.hasMore = false;
+    return { success: false, error: 'navigation_failed' };
   }
 
   /**

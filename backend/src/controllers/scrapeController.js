@@ -124,7 +124,7 @@ export const startScrape = async (req, res) => {
   try {
     const {
       query,
-      maxPages = 5,
+      maxPages,
       delay = 2000,
       salaryRanges,
       ageRanges,

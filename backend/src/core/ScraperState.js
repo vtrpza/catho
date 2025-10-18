@@ -75,6 +75,15 @@ export class ScraperState {
    * Set total pages
    */
   setTotalPages(total) {
+    if (typeof total !== 'number' || Number.isNaN(total)) {
+      return;
+    }
+
+    if (!Number.isFinite(total) || total < 0) {
+      this.progress.totalPages = 0;
+      return;
+    }
+
     this.progress.totalPages = total;
   }
 

@@ -59,7 +59,7 @@ export class CheckpointService {
       [
         sessionId,
         searchQuery,
-        options.maxPages || 5,
+        options.maxPages ?? null,
         JSON.stringify(options)
       ]
     );
