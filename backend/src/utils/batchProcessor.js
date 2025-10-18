@@ -8,8 +8,8 @@ import { humanizedWait, getAdaptiveDelay, simulateHumanBehavior } from './antiDe
 export class BatchProcessor {
   constructor(browser, options = {}) {
     this.browser = browser;
-    this.concurrency = options.concurrency || 3; // Number of parallel tabs
-    this.maxBatchSize = options.maxBatchSize || 50; // Profiles per batch
+    this.concurrency = options.concurrency || 21; // Number of parallel tabs
+    this.maxBatchSize = options.maxBatchSize || 21; // Profiles per batch
     this.profileDelay = options.profileDelay || 2500;
     this.errorCount = 0;
     this.lastRequestTime = 0;
@@ -113,9 +113,11 @@ export class BatchProcessor {
     let failed = 0;
 
     try {
-      if (this.pageSetup) {
+      if (this.pageSetup && !page.__cathoAuthReady) {
         try {
           await this.pageSetup(page);
+          page.__cathoAuthReady = true;
+          page.__cathoSessionStamp = Date.now();
         } catch (setupError) {
           console.log(`  ⚠️ Worker ${workerSlot + 1}: falha ao preparar página (${setupError.message}).`);
         }
@@ -192,6 +194,15 @@ export class BatchProcessor {
       try {
         const page = await this.browser.newPage();
         const workerId = this.workerPool.length;
+        if (this.pageSetup && !page.__cathoAuthReady) {
+          try {
+            await this.pageSetup(page);
+            page.__cathoAuthReady = true;
+            page.__cathoSessionStamp = Date.now();
+          } catch (setupError) {
+            console.log(`  ⚠️ Falha ao preparar novo worker (${setupError.message}).`);
+          }
+        }
         this.workerPool.push({ page, id: workerId });
       } catch (error) {
         console.error('❌ Falha ao criar worker page:', error.message);

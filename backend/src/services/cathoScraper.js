@@ -67,7 +67,7 @@ export class CathoScraper extends BaseScraper {
       resumeRepo: this.resumeRepo,
       profileRepo: this.profileRepo
     }, {
-      maxRequestsPerMinute: 30,
+      maxRequestsPerMinute: 21,
       errorThreshold: 5
     });
 

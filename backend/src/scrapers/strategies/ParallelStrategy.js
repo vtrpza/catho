@@ -8,9 +8,9 @@ import { BatchProcessor } from '../../utils/batchProcessor.js';
 export class ParallelStrategy extends BaseStrategy {
   constructor(options = {}) {
     super(options);
-    this.concurrency = options.concurrency || 3;
+    this.concurrency = options.concurrency || 21;
     this.profileDelay = options.profileDelay || 2500;
-    this.maxBatchSize = options.maxBatchSize || 50;
+    this.maxBatchSize = options.maxBatchSize || 21;
   }
 
   /**

@@ -23,12 +23,12 @@ const DEFAULT_PROGRESS = {
   metrics: {
     profilesPerMinute: 0,
     avgProfileLatencyMs: null,
-    concurrency: null,
-    rpmLimit: null,
+    concurrency: 21,
+    rpmLimit: 21,
     etaMs: null,
-    targetProfilesPerMinute: null,
+    targetProfilesPerMinute: 21,
     targetProfiles: null,
-    mode: null
+    mode: 'balanced'
   }
 };
 

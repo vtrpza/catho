@@ -47,9 +47,9 @@ export class ScraperOrchestrator {
       mode: 'balanced'
     };
     this.modePresets = {
-      conservative: { minConcurrency: 2, maxConcurrency: 4, rpmMultiplier: 1.15, profileDelayMultiplier: 1.1 },
-      balanced: { minConcurrency: 3, maxConcurrency: 8, rpmMultiplier: 1.4, profileDelayMultiplier: 1 },
-      fast: { minConcurrency: 4, maxConcurrency: 12, rpmMultiplier: 1.75, profileDelayMultiplier: 0.9 }
+      conservative: { minConcurrency: 21, maxConcurrency: 21, rpmMultiplier: 1, profileDelayMultiplier: 1.1 },
+      balanced: { minConcurrency: 21, maxConcurrency: 21, rpmMultiplier: 1, profileDelayMultiplier: 1 },
+      fast: { minConcurrency: 21, maxConcurrency: 21, rpmMultiplier: 1, profileDelayMultiplier: 0.9 }
     };
     this.metrics = {
       samples: [],
@@ -57,7 +57,7 @@ export class ScraperOrchestrator {
       currentProfilesPerMin: 0,
       avgProfileLatencyMs: null,
       lastAdjustment: 0,
-      currentConcurrency: options.defaultConcurrency || 3,
+      currentConcurrency: options.defaultConcurrency || 21,
       currentProfileDelay: 2500,
       rpmLimit: this.rateLimiter.maxRequestsPerMinute,
       phaseTimings: {
@@ -110,7 +110,7 @@ export class ScraperOrchestrator {
       scrapeFullProfiles = true,
       profileDelay = 2500,
       enableParallel = true,
-      concurrency = 3
+      concurrency = 21
     } = options;
 
     this.initializeAdaptiveSettings(options, {
@@ -193,13 +193,14 @@ export class ScraperOrchestrator {
           const listingStart = Date.now();
           const pageResumes = await this.listingExtractor.extract(page, { searchQuery });
           this.metrics.phaseTimings.lastListingMs = Date.now() - listingStart;
+          const limitedResumes = pageResumes.slice(0, 21);
 
-          if (pageResumes.length === 0) {
+          if (limitedResumes.length === 0) {
             console.log('⚠️ No resumes found on this page. Finishing...');
             break;
           }
 
-          const resumesWithSession = pageResumes.map(resume => ({
+          const resumesWithSession = limitedResumes.map(resume => ({
             ...resume,
             session_id: this.sessionId
           }));
@@ -218,7 +219,7 @@ export class ScraperOrchestrator {
             }
           });
 
-          console.log(`✓ Collected ${pageResumes.length} resumes from this page`);
+          console.log(`✓ Collected ${resumesWithSession.length} resumes from this page`);
           console.log(`📈 Total collected so far: ${this.state.progress.resumesScraped}`);
 
           this.updateAndEmitProgress();
@@ -227,8 +228,8 @@ export class ScraperOrchestrator {
           const newUniqueCount = (updatedProgress.resumesScraped || 0) - previousUniqueCount;
           consecutiveStalledPages = newUniqueCount > 0 ? 0 : consecutiveStalledPages + 1;
 
-          if (totalResults > 0 && pageResumes.length > 0 && !hasPageLimit) {
-            const estimatedTotalPages = Math.ceil(totalResults / pageResumes.length);
+          if (totalResults > 0 && limitedResumes.length > 0 && !hasPageLimit) {
+            const estimatedTotalPages = Math.ceil(totalResults / limitedResumes.length);
             if (estimatedTotalPages > 0) {
               this.state.setTotalPages(estimatedTotalPages);
             }
@@ -259,13 +260,13 @@ export class ScraperOrchestrator {
             break;
           }
 
-          if (scrapeFullProfiles && pageResumes.length > 0) {
+          if (scrapeFullProfiles && limitedResumes.length > 0) {
             if (!(await this.handleControlSignals())) {
               console.log('ℹ️ Interrompendo scraping de perfis por sinal externo.');
               break;
             }
 
-            const profileUrls = pageResumes
+            const profileUrls = limitedResumes
               .filter(r => r.profile_url)
               .map(r => r.profile_url);
 
@@ -273,7 +274,7 @@ export class ScraperOrchestrator {
               this.state.setProfilesTotal(this.state.progress.profilesTotal + profileUrls.length);
 
               // Choose strategy based on settings
-              const dynamicConcurrency = Math.max(1, this.metrics.currentConcurrency || concurrency || 3);
+              const dynamicConcurrency = Math.max(1, this.metrics.currentConcurrency || concurrency || 21);
               const dynamicProfileDelay = Math.max(300, Math.floor(this.metrics.currentProfileDelay || profileDelay || 2500));
               const shouldUseParallel = enableParallel && dynamicConcurrency > 1 && profileUrls.length >= 3;
               const profileContext = {
@@ -291,6 +292,8 @@ export class ScraperOrchestrator {
                   sequentialWorkerPage = await this.auth.browser.newPage();
                   await this.auth.preparePage(sequentialWorkerPage);
                   await this.auth.applySessionTo(sequentialWorkerPage);
+                  sequentialWorkerPage.__cathoAuthReady = true;
+                  sequentialWorkerPage.__cathoSessionStamp = Date.now();
                   profileContext.page = sequentialWorkerPage;
                 } catch (workerError) {
                   console.warn('⚠️ Could not create dedicated profile page:', workerError.message);
@@ -525,7 +528,7 @@ export class ScraperOrchestrator {
       return fallback;
     };
 
-    const targetProfilesPerMin = parsePositiveInt(adaptive.targetProfilesPerMin, 200);
+    const targetProfilesPerMin = parsePositiveInt(adaptive.targetProfilesPerMin, 21);
     const targetProfiles = parsePositiveInt(adaptive.targetProfiles);
     const timeBudgetMinutes = parsePositiveInt(adaptive.timeBudgetMinutes);
 
@@ -553,7 +556,7 @@ export class ScraperOrchestrator {
     const latencySeconds = Math.max(initialProfileDelay / 1000, 0.5);
     const concurrencyFromTarget = Math.ceil((targetProfilesPerMin * latencySeconds) / 60);
 
-    let derivedConcurrency = requestedConcurrency || concurrencyFromTarget || modeSettings.minConcurrency || 3;
+    let derivedConcurrency = requestedConcurrency || concurrencyFromTarget || modeSettings.minConcurrency || 21;
     derivedConcurrency = this.clampConcurrency(derivedConcurrency, modeSettings);
 
     this.performanceGoal = {
@@ -794,7 +797,7 @@ export class ScraperOrchestrator {
    */
   async scrapeProfiles(profileUrls, useParallel, context) {
     const { page, searchQuery } = context;
-    const concurrency = Math.max(1, context.concurrency || this.metrics.currentConcurrency || 1);
+    const concurrency = Math.max(1, context.concurrency || this.metrics.currentConcurrency || 21);
     const profileDelay = Math.max(300, context.profileDelay || this.metrics.currentProfileDelay || 2500);
 
     // Create scrape and save functions
@@ -806,6 +809,21 @@ export class ScraperOrchestrator {
 
       // Check rate limiter
       await this.rateLimiter.waitForSlot();
+
+      // Refresh session if needed
+      try {
+        const now = Date.now();
+        const needsRefresh =
+          !workerPage.__cathoSessionStamp ||
+          now - workerPage.__cathoSessionStamp > 180000;
+        if (needsRefresh && this.auth && typeof this.auth.applySessionTo === 'function') {
+          await this.auth.applySessionTo(workerPage);
+          workerPage.__cathoSessionStamp = Date.now();
+          workerPage.__cathoAuthReady = true;
+        }
+      } catch (sessionError) {
+        console.warn('⚠️ Falha ao revalidar sessão do worker:', sessionError.message);
+      }
 
       const result = await this.profileExtractor.extract(workerPage, { profileUrl: url });
       const responseMeta = {

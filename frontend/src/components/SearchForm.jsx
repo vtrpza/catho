@@ -85,32 +85,12 @@ const LAST_UPDATED_OPTIONS = [
   { value: 730, label: 'Ate 2 anos' }
 ];
 
-const PERFORMANCE_MODES = [
-  {
-    id: 'conservative',
-    title: 'Conservador',
-    description: 'Menor carga, prioriza seguranca da conta (~120 perfis/min)',
-    targetProfilesPerMinute: 120
-  },
-  {
-    id: 'balanced',
-    title: 'Equilibrado',
-    description: 'Recomendado: equilibra velocidade e estabilidade (~220 perfis/min)',
-    targetProfilesPerMinute: 220
-  },
-  {
-    id: 'fast',
-    title: 'Rapido',
-    description: 'Entrega maxima velocidade com maior uso de recursos (~320 perfis/min)',
-    targetProfilesPerMinute: 320
-  }
-];
+const DEFAULT_WORKER_COUNT = 21;
 
 export default function SearchForm({ onSearch, isLoading }) {
   const [query, setQuery] = useState('');
   const [limitPages, setLimitPages] = useState(false);
   const [maxPages, setMaxPages] = useState(10);
-  const [performanceMode, setPerformanceMode] = useState('balanced');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [salaryRanges, setSalaryRanges] = useState([]);
@@ -130,10 +110,6 @@ export default function SearchForm({ onSearch, isLoading }) {
       setter([...list, value]);
     }
   };
-
-  const selectedMode =
-    PERFORMANCE_MODES.find((mode) => mode.id === performanceMode) || PERFORMANCE_MODES[1];
-  const targetProfilesPerMinute = selectedMode?.targetProfilesPerMinute ?? 220;
 
   const buildFilterPayload = () => {
     const trimmedQuery = query.trim();
@@ -159,8 +135,7 @@ export default function SearchForm({ onSearch, isLoading }) {
 
     const params = {
       ...filters,
-      performanceMode,
-      targetProfilesPerMin: targetProfilesPerMinute
+      concurrency: DEFAULT_WORKER_COUNT
     };
 
     if (limitPages && maxPages > 0) {
@@ -264,37 +239,6 @@ export default function SearchForm({ onSearch, isLoading }) {
               )}
             </div>
           </div>
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Velocidade desejada
-          </label>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {PERFORMANCE_MODES.map((mode) => {
-              const isSelected = performanceMode === mode.id;
-              return (
-                <button
-                  type="button"
-                  key={mode.id}
-                  onClick={() => setPerformanceMode(mode.id)}
-                  className={`text-left px-4 py-3 rounded-lg border transition-colors ${
-                    isSelected
-                      ? 'border-primary-500 bg-primary-50 text-primary-700 shadow-sm'
-                      : 'border-gray-200 bg-white text-gray-700 hover:border-primary-300 hover:bg-primary-50/40'
-                  }`}
-                  disabled={isLoading}
-                  aria-pressed={isSelected}
-                >
-                  <span className="block text-sm font-semibold">{mode.title}</span>
-                  <span className="block text-xs text-gray-500 mt-1">{mode.description}</span>
-                </button>
-              );
-            })}
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            Modo {selectedMode.title}: miramos cerca de {targetProfilesPerMinute.toLocaleString('pt-BR')} perfis por minuto.
-          </p>
         </div>
 
         <div>

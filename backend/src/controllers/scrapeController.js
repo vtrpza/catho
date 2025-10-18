@@ -147,7 +147,6 @@ export const startScrape = async (req, res) => {
       candidateSituation = 'indifferent',
       disabilityStatus = 'indifferent',
       enableParallel = true,
-      concurrency = 3,
       scrapeFullProfiles = true,
       profileDelay = 2500,
       targetProfilesPerMin,
@@ -183,6 +182,8 @@ export const startScrape = async (req, res) => {
     currentScraperCleanup = bindScraperEvents(scraper);
     currentScraper = scraper;
 
+    const workerCount = 21;
+
     const scrapeOptions = {
       adaptive: {
         targetProfilesPerMin: parseInt(targetProfilesPerMin, 10) || undefined,
@@ -191,12 +192,12 @@ export const startScrape = async (req, res) => {
         mode: performanceMode || 'balanced'
       },
       advanced: {
+        ...(advanced && typeof advanced === 'object' ? advanced : {}),
         maxPages,
         delay,
         enableParallel,
-        concurrency,
-        profileDelay,
-        ...(advanced && typeof advanced === 'object' ? advanced : {})
+        concurrency: workerCount,
+        profileDelay
       },
       maxPages,
       delay,
@@ -210,7 +211,7 @@ export const startScrape = async (req, res) => {
       candidateSituation,
       disabilityStatus,
       enableParallel,
-      concurrency,
+      concurrency: workerCount,
       scrapeFullProfiles,
       profileDelay
     };
