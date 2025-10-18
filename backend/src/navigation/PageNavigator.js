@@ -19,10 +19,18 @@ export class PageNavigator {
       console.log(`🔍 Navigating to: ${url}`);
 
       const startTime = Date.now();
-      await page.goto(url, {
+
+      // Add timeout wrapper to prevent infinite hangs
+      const navigationPromise = page.goto(url, {
         waitUntil: 'domcontentloaded',
-        timeout: 30000
+        timeout: 20000 // Reduced from 30s to 20s
       });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Navigation timeout exceeded')), 25000)
+      );
+
+      await Promise.race([navigationPromise, timeoutPromise]);
       const requestTime = Date.now() - startTime;
 
       // Wait for resume tiles to appear when possible

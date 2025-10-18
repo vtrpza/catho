@@ -311,6 +311,22 @@ export function getStealthBrowserArgs() {
     '--disable-features=IsolateOrigins,site-per-process',
     '--flag-switches-begin --disable-site-isolation-trials --flag-switches-end',
     '--disable-web-security',
-    '--disable-features=VizDisplayCompositor'
+    '--disable-features=VizDisplayCompositor',
+    // Performance optimizations for high concurrency
+    '--disable-extensions',
+    '--disable-background-networking',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-hang-monitor',
+    '--disable-ipc-flooding-protection',
+    '--disable-popup-blocking',
+    '--disable-prompt-on-repost',
+    '--metrics-recording-only',
+    '--no-first-run',
+    '--safebrowsing-disable-auto-update',
+    '--enable-automation',
+    '--password-store=basic',
+    '--use-mock-keychain'
   ];
 }

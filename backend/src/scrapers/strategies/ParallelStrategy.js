@@ -11,6 +11,7 @@ export class ParallelStrategy extends BaseStrategy {
     this.concurrency = options.concurrency || 21;
     this.profileDelay = options.profileDelay || 2500;
     this.maxBatchSize = options.maxBatchSize || 21;
+    this.batchProcessor = null; // Keep reference for cleanup
   }
 
   /**
@@ -47,7 +48,7 @@ export class ParallelStrategy extends BaseStrategy {
     this.resetStats();
     const { browser, searchQuery, pageSetup } = context;
 
-    const batchProcessor = new BatchProcessor(browser, {
+    this.batchProcessor = new BatchProcessor(browser, {
       concurrency: this.concurrency,
       maxBatchSize: this.maxBatchSize,
       profileDelay: this.profileDelay,
@@ -76,7 +77,7 @@ export class ParallelStrategy extends BaseStrategy {
       await saveFunction(url, data, searchQuery);
     };
 
-    const results = await batchProcessor.processBatch(
+    const results = await this.batchProcessor.processBatch(
       profileUrls,
       wrappedScrapeFunction,
       wrappedSaveFunction
@@ -91,5 +92,15 @@ export class ParallelStrategy extends BaseStrategy {
     console.log(`  ✅ Parallel scraping completed: ${results.succeeded}/${results.processed} successes`);
 
     return this.getStats();
+  }
+
+  /**
+   * Clean up any open worker pages
+   */
+  async cleanup() {
+    if (this.batchProcessor) {
+      await this.batchProcessor.closeAllWorkers();
+      this.batchProcessor = null;
+    }
   }
 }

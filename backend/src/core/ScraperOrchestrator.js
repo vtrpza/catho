@@ -308,11 +308,22 @@ export class ScraperOrchestrator {
               try {
                 await this.scrapeProfiles(profileUrls, shouldUseParallel, profileContext);
               } finally {
+                // Clean up sequential worker page
                 if (sequentialWorkerPage) {
                   await sequentialWorkerPage.close().catch(() => {});
-                } else if (!shouldUseParallel) {
-                  // Fallback to ensure search page is restored when using main page for profiles
-                  await this.navigator.goToSearch(page, searchUrl, currentPage).catch(() => {});
+                }
+
+                // Clean up parallel workers from strategy (if any)
+                if (shouldUseParallel && this.parallelStrategy) {
+                  await this.parallelStrategy.cleanup().catch(() => {});
+                }
+
+                // Always return to search page after profile scraping
+                try {
+                  console.log(`🔄 Retornando à página de busca...`);
+                  await this.navigator.goToSearch(page, searchUrl, currentPage);
+                } catch (navError) {
+                  console.warn(`⚠️ Falha ao retornar à página de busca: ${navError.message}`);
                 }
               }
             }
@@ -810,7 +821,8 @@ export class ScraperOrchestrator {
       // Check rate limiter
       await this.rateLimiter.waitForSlot();
 
-      // Refresh session if needed
+      // Refresh session if needed (every 3 minutes)
+      // applySessionTo will automatically snapshot fresh cookies from main page
       try {
         const now = Date.now();
         const needsRefresh =
@@ -893,9 +905,12 @@ export class ScraperOrchestrator {
         await this.auth.preparePage(workerPage);
         await this.auth.applySessionTo(workerPage);
       };
+      // Store reference for cleanup
+      this.parallelStrategy = strategy;
     } else {
       strategy = new SequentialStrategy({ profileDelay });
       strategy.setProfileDelay(profileDelay);
+      this.parallelStrategy = null;
     }
 
     const results = await strategy.process(

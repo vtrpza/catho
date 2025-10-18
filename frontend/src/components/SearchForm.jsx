@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { scraperAPI } from '../services/api';
 
 const SALARY_RANGES = [
   { id: 1, label: 'Ate R$ 1.000' },
@@ -91,7 +92,17 @@ export default function SearchForm({ onSearch, isLoading }) {
   const [query, setQuery] = useState('');
   const [limitPages, setLimitPages] = useState(false);
   const [maxPages, setMaxPages] = useState(10);
+<<<<<<< HEAD
+=======
+  const [goalMode, setGoalMode] = useState('all'); // 'all' | 'target'
+  const [targetProfiles, setTargetProfiles] = useState('2000');
+  const [performanceMode, setPerformanceMode] = useState('balanced');
+>>>>>>> parent of 3c34f2a (0)
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [goalError, setGoalError] = useState(null);
+  const [countStatus, setCountStatus] = useState('idle'); // idle | loading | success | error
+  const [countResult, setCountResult] = useState(null);
+  const [countError, setCountError] = useState(null);
 
   const [salaryRanges, setSalaryRanges] = useState([]);
   const [ageRanges, setAgeRanges] = useState([]);
@@ -111,6 +122,16 @@ export default function SearchForm({ onSearch, isLoading }) {
     }
   };
 
+<<<<<<< HEAD
+=======
+  const selectedMode =
+    PERFORMANCE_MODES.find((mode) => mode.id === performanceMode) || PERFORMANCE_MODES[1];
+  const targetProfilesPerMinute = selectedMode?.targetProfilesPerMinute ?? 220;
+  const parsedTargetProfiles = parseInt(targetProfiles, 10);
+  const hasTargetProfiles = Number.isFinite(parsedTargetProfiles) && parsedTargetProfiles > 0;
+  const isCounting = countStatus === 'loading';
+
+>>>>>>> parent of 3c34f2a (0)
   const buildFilterPayload = () => {
     const trimmedQuery = query.trim();
     const filters = {
@@ -142,15 +163,61 @@ export default function SearchForm({ onSearch, isLoading }) {
       params.maxPages = maxPages;
     }
 
+    if (goalMode === 'target' && hasTargetProfiles) {
+      params.targetProfiles = parsedTargetProfiles;
+    }
+
     return params;
   };
 
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!query.trim()) return;
+    if (goalMode === 'target' && !hasTargetProfiles) {
+      setGoalError('Informe um numero valido para encerrar a coleta.');
+      return;
+    }
+
+    setGoalError(null);
+    setCountStatus('idle');
+    setCountResult(null);
+    setCountError(null);
 
     const searchParams = buildSearchParams();
     onSearch(searchParams);
+  };
+
+  const handleEstimateCount = async () => {
+    if (!query.trim()) {
+      setGoalError('Informe o cargo ou palavra-chave antes de estimar.');
+      return;
+    }
+
+    try {
+      setGoalError(null);
+      setCountStatus('loading');
+      setCountResult(null);
+      setCountError(null);
+
+      const payload = buildFilterPayload();
+      const response = await scraperAPI.countResumes(payload);
+      const total = response.data?.total ?? 0;
+      setCountResult(total);
+      setCountStatus('success');
+    } catch (error) {
+      console.error('Falha ao estimar total de perfis:', error);
+      setCountStatus('error');
+      const message = error.response?.data?.error || 'Nao foi possivel estimar a quantidade de perfis.';
+      setCountError(message);
+    }
+  };
+
+  const handleGoalModeSelection = (mode) => {
+    setGoalMode(mode);
+    setGoalError(null);
+    setCountStatus('idle');
+    setCountResult(null);
+    setCountError(null);
   };
 
   const clearFilters = () => {
@@ -197,51 +264,184 @@ export default function SearchForm({ onSearch, isLoading }) {
           />
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Alcance da busca
-          </label>
-          <div className="flex items-start gap-3">
-            <input
-              type="checkbox"
-              id="limitPages"
-              checked={limitPages}
-              onChange={(e) => setLimitPages(e.target.checked)}
-              className="mt-1 h-4 w-4 rounded text-primary-600 focus:ring-primary-500"
-              disabled={isLoading}
-            />
-            <div className="flex-1">
-              <label htmlFor="limitPages" className="font-medium text-gray-800">
-                Limitar numero de paginas
-              </label>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Alcance da busca
+            </label>
+            <div className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                id="limitPages"
+                checked={limitPages}
+                onChange={(e) => setLimitPages(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded text-primary-600 focus:ring-primary-500"
+                disabled={isLoading}
+              />
+              <div className="flex-1">
+                <label htmlFor="limitPages" className="font-medium text-gray-800">
+                  Limitar numero de paginas
+                </label>
+                <p className="text-xs text-gray-500">
+                  Desmarcado: coleta todas as paginas disponiveis (padrao recomendado).
+                </p>
+                {limitPages ? (
+                  <div className="mt-3">
+                    <input
+                      type="number"
+                      id="maxPages"
+                      value={maxPages}
+                      onChange={(e) => setMaxPages(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      min="1"
+                      className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      disabled={isLoading}
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Ideal para testes rapidos. Valor minimo: 1 pagina.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm text-gray-600">
+                    Vamos percorrer todas as paginas retornadas pelo Catho ate o fim dos resultados.
+                  </p>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-gray-700">Meta de coleta</span>
               <p className="text-xs text-gray-500">
-                Desmarcado: coleta todas as paginas disponiveis (padrao recomendado).
+                Escolha se deseja coletar o maximo possivel ou encerrar automaticamente apos atingir um total aproximado.
               </p>
-              {limitPages ? (
-                <div className="mt-3">
-                  <input
-                    type="number"
-                    id="maxPages"
-                    value={maxPages}
-                    onChange={(e) => setMaxPages(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    min="1"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                    disabled={isLoading}
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Ideal para testes rapidos. Valor minimo: 1 pagina.
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="goalMode"
+                  value="all"
+                  checked={goalMode === 'all'}
+                  onChange={() => handleGoalModeSelection('all')}
+                  className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500"
+                  disabled={isLoading}
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-800">Coletar o máximo possivel</span>
+                  <p className="text-xs text-gray-500">
+                    O coletor continua ate acabarem os resultados ou voce encerrar manualmente.
                   </p>
                 </div>
-              ) : (
-                <p className="mt-3 text-sm text-gray-600">
-                  Vamos percorrer todas as paginas retornadas pelo Catho ate o fim dos resultados.
-                </p>
+              </label>
+
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="goalMode"
+                  value="target"
+                  checked={goalMode === 'target'}
+                  onChange={() => handleGoalModeSelection('target')}
+                  className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500"
+                  disabled={isLoading}
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-800">Encerrar após atingir um total aproximado</span>
+                  <p className="text-xs text-gray-500">
+                    Informe um numero de perfis que atenda a sua necessidade. Use a estimativa para entender o volume disponível.
+                  </p>
+                </div>
+              </label>
+
+              {goalMode === 'target' && (
+                <div className="pl-7 space-y-2">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="number"
+                      id="targetProfiles"
+                      min="100"
+                      step="100"
+                      value={targetProfiles}
+                      onChange={(e) => {
+                        setTargetProfiles(e.target.value);
+                        setGoalError(null);
+                      }}
+                      className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      placeholder="Ex: 2000"
+                      disabled={isLoading}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleEstimateCount}
+                      className={`px-4 py-2 text-sm font-semibold rounded-md border transition-colors ${
+                        isCounting
+                          ? 'border-gray-300 text-gray-500 bg-white'
+                          : 'border-primary-500 text-primary-600 bg-white hover:bg-primary-50'
+                      }`}
+                      disabled={isLoading || isCounting}
+                    >
+                      {isCounting ? 'Estimando...' : 'Estimar total'}
+                    </button>
+                  </div>
+                  {goalError && (
+                    <p className="text-xs text-red-600">{goalError}</p>
+                  )}
+                  {countStatus === 'success' && countResult !== null && (
+                    <p className="text-xs text-green-700">
+                      Encontramos aproximadamente {countResult.toLocaleString('pt-BR')} perfis para esta busca.
+                    </p>
+                  )}
+                  {countStatus === 'error' && countError && (
+                    <p className="text-xs text-red-600">{countError}</p>
+                  )}
+                  {countStatus === 'loading' && (
+                    <p className="text-xs text-gray-500">Consultando quantidade de perfis...</p>
+                  )}
+                </div>
               )}
+            </div>
+
+            <div className="mt-4 rounded-md border border-primary-100 bg-white px-4 py-3">
+              <p className="text-xs text-primary-700">
+                Modo {selectedMode.title}: miramos cerca de {targetProfilesPerMinute.toLocaleString('pt-BR')} perfis por minuto. Ajuste a velocidade abaixo caso precise mudar o ritmo.
+              </p>
             </div>
           </div>
         </div>
 
         <div>
+<<<<<<< HEAD
+=======
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Velocidade desejada
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {PERFORMANCE_MODES.map((mode) => {
+              const isSelected = performanceMode === mode.id;
+              return (
+                <button
+                  type="button"
+                  key={mode.id}
+                  onClick={() => setPerformanceMode(mode.id)}
+                  className={`text-left px-4 py-3 rounded-lg border transition-colors ${
+                    isSelected
+                      ? 'border-primary-500 bg-primary-50 text-primary-700 shadow-sm'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-primary-300 hover:bg-primary-50/40'
+                  }`}
+                  disabled={isLoading}
+                  aria-pressed={isSelected}
+                >
+                  <span className="block text-sm font-semibold">{mode.title}</span>
+                  <span className="block text-xs text-gray-500 mt-1">{mode.description}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+>>>>>>> parent of 3c34f2a (0)
           <button
             type="button"
             onClick={() => setShowAdvanced(!showAdvanced)}

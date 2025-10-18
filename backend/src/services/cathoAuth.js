@@ -35,7 +35,8 @@ export class CathoAuth {
 
       this.browser = await puppeteer.launch({
         headless: isDebugMode ? false : 'new',
-        args: getStealthBrowserArgs()
+        args: getStealthBrowserArgs(),
+        protocolTimeout: 120000  // Increase timeout for high concurrency
       });
 
       this.page = await this.browser.newPage();
@@ -139,7 +140,8 @@ export class CathoAuth {
       if (!this.isAuthenticated) {
         await this.login();
       }
-      await this.applySessionTo(this.page);
+      // Don't re-apply session to main page - it's already authenticated
+      // await this.applySessionTo(this.page);
 
       const searchUrl = `https://www.catho.com.br/curriculos/busca/?q=${encodeURIComponent(searchQuery)}&pais_id=31`;
       console.log(`🔍 Navegando para: ${searchUrl}`);
@@ -280,19 +282,42 @@ export class CathoAuth {
     }
   }
 
-  async applySessionTo(page) {
+  async applySessionTo(page, options = {}) {
     if (!page) return;
 
-    await this.preparePage(page);
-
-    if (this.sessionData.cookies.length > 0) {
+    // Refresh session from main page before applying (unless explicitly skipped)
+    const shouldRefreshSnapshot = options.skipSnapshot !== true;
+    if (shouldRefreshSnapshot && this.page && this.isAuthenticated) {
       try {
-        await page.setCookie(...this.sessionData.cookies);
-      } catch (error) {
-        console.log('⚠️ Não foi possível aplicar cookies na nova página:', error.message);
+        await this.snapshotSession();
+      } catch (snapshotError) {
+        console.warn('⚠️ Falha ao atualizar snapshot de sessão:', snapshotError.message);
       }
     }
 
+    // CRITICAL: Set cookies BEFORE enabling request interception
+    // Navigate to Catho domain first - Puppeteer requires a page URL before setCookie works
+    if (this.sessionData.cookies.length > 0) {
+      try {
+        // Navigate to base domain to establish context for cookies - minimal wait
+        await page.goto('https://www.catho.com.br/', {
+          waitUntil: 'domcontentloaded',
+          timeout: 10000
+        });
+
+        await page.setCookie(...this.sessionData.cookies);
+        console.log(`  🍪 Applied ${this.sessionData.cookies.length} cookies`);
+      } catch (error) {
+        console.log('⚠️ Não foi possível aplicar cookies na nova página:', error.message);
+      }
+    } else {
+      console.warn('⚠️ No cookies to apply! Session may not be authenticated.');
+    }
+
+    // Now prepare page (enables request interception) - cookies already set
+    await this.preparePage(page);
+
+    // localStorage - applies to future navigations
     if (this.sessionData.localStorage.length > 0) {
       try {
         await page.evaluateOnNewDocument((entries) => {

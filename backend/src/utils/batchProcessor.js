@@ -48,6 +48,10 @@ export class BatchProcessor {
       totalSucceeded += results.succeeded;
       totalFailed += results.failed;
 
+      // Clean up worker pages after each chunk to prevent resource exhaustion
+      console.log(`🧹 Limpando ${this.workerPool.length} worker pages...`);
+      await this.closeAllWorkers();
+
       // Small delay between chunks
       if (chunkIndex < chunks.length - 1) {
         const delay = getAdaptiveDelay(2000, this.errorCount, this.lastRequestTime);
@@ -153,16 +157,10 @@ export class BatchProcessor {
           processed++;
           this.activeJobs.delete(jobId);
 
-          // Adaptive delay between requests for this worker
+          // Minimal delay between requests - speed optimized
           if (queue.length > 0) {
-            const delay = getAdaptiveDelay(this.profileDelay, this.errorCount, this.lastRequestTime);
-            const workerDelay = delay + (workerSlot * 200); // Stagger workers slightly
-            await humanizedWait(page, workerDelay, 0.3);
-
-            // Occasionally simulate human behavior
-            if (Math.random() > 0.8) {
-              await simulateHumanBehavior(page);
-            }
+            // Only minimal delay, no humanization needed for parallel workers
+            await new Promise(resolve => setTimeout(resolve, 300));
           }
 
         } catch (error) {
@@ -194,7 +192,7 @@ export class BatchProcessor {
       try {
         const page = await this.browser.newPage();
         const workerId = this.workerPool.length;
-        if (this.pageSetup && !page.__cathoAuthReady) {
+        if (this.pageSetup) {
           try {
             await this.pageSetup(page);
             page.__cathoAuthReady = true;

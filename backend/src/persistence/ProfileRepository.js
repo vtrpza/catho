@@ -10,7 +10,6 @@ export class ProfileRepository {
    * Save full profile with all related data
    */
   async saveFullProfile(profileUrl, profileData, searchQuery) {
-    let transactionStarted = false;
     let resumeId = null;
 
     const {
@@ -25,8 +24,7 @@ export class ProfileRepository {
     } = profileData;
 
     try {
-      await this.db.exec('BEGIN TRANSACTION');
-      transactionStarted = true;
+      // No explicit transaction - let SQLite WAL mode handle concurrency
 
       const existing = await this.db.get('SELECT id FROM resumes WHERE profile_url = ?', [profileUrl]);
 
@@ -100,16 +98,9 @@ export class ProfileRepository {
       await this.saveLanguages(resumeId, languages || []);
       await this.saveSkills(resumeId, skills || []);
 
-      await this.db.exec('COMMIT');
-      transactionStarted = false;
-
       return resumeId;
 
     } catch (error) {
-      if (transactionStarted) {
-        await this.db.exec('ROLLBACK').catch(() => {});
-      }
-
       console.error('❌ Error saving full profile:', error.message);
 
       try {

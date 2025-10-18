@@ -35,7 +35,7 @@ export class ProfileExtractor extends BaseExtractor {
       extractionClockStart = Date.now();
       const response = await page.goto(profileUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 30000
+        timeout: 15000  // Reduced from 30s
       });
       requestTime = Date.now() - extractionClockStart;
 
@@ -44,20 +44,15 @@ export class ProfileExtractor extends BaseExtractor {
       navigationMeta.loginRedirect = /\/login/i.test(finalUrl);
       navigationMeta.blocked = navigationMeta.status === 429 || navigationMeta.status === 403;
 
+      // Minimal wait for content - reduced from 8s to 3s
       try {
-        await page.waitForSelector('h1, .candidate-name, button svg[data-testid="SmartphoneIcon"]', {
-          timeout: 8000
+        await page.waitForSelector('h1, .candidate-name', {
+          timeout: 3000
         });
       } catch {
-        // Allow extraction to proceed when selector is absent but keep a minimal delay
-        await page.waitForTimeout(500);
+        // Proceed anyway - page might already be loaded
+        await page.waitForTimeout(200);
       }
-
-      // Humanized wait
-      await humanizedWait(page, 2000, 0.4);
-
-      // Simulate reading the profile
-      await simulateHumanBehavior(page);
 
       // Extract contact info by clicking buttons
       const contactInfo = await this.contactExtractor.extract(page, context);
