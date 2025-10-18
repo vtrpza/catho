@@ -18,6 +18,8 @@ export class RateLimiter {
     this.circuitState = 'closed'; // closed, open, half-open
     this.lastCircuitOpen = null;
     this.lastRequestTimestamp = null;
+    this.backoffPenalty = 0;
+    this.lastResponseMeta = null;
   }
 
   /**
@@ -92,14 +94,19 @@ export class RateLimiter {
   /**
    * Record a successful request
    */
-  recordRequest() {
+  recordRequest(meta = {}) {
     const now = Date.now();
     this.requestHistory.push(now);
     this.lastRequestTimestamp = now;
+    this.lastResponseMeta = meta || null;
 
     // Reset error count on success
     if (this.errorCount > 0) {
       this.errorCount--;
+    }
+
+    if (this.backoffPenalty > 0) {
+      this.backoffPenalty = Math.max(0, this.backoffPenalty - 1);
     }
 
     // Close circuit if it was half-open and request succeeded
@@ -113,8 +120,24 @@ export class RateLimiter {
   /**
    * Record a failed request
    */
-  recordError(error) {
+  recordError(error, meta = {}) {
     this.errorCount++;
+    this.lastResponseMeta = meta || null;
+
+    const status = meta?.status ? Number(meta.status) : null;
+    const loginRedirect = Boolean(meta?.loginRedirect);
+    const blocked = Boolean(meta?.blocked);
+
+    if (status === 429 || status === 403 || blocked || loginRedirect) {
+      this.backoffPenalty = Math.min(this.backoffPenalty + 1, 5);
+      if (this.circuitState !== 'open') {
+        this.circuitState = 'open';
+        this.lastCircuitOpen = Date.now();
+        const reason = status || (loginRedirect ? 'login_redirect' : 'blocked');
+        console.log(`🚨 Circuit breaker: OPEN (${reason})`);
+      }
+      return;
+    }
 
     // Open circuit if error threshold reached
     if (this.errorCount >= this.errorThreshold && this.circuitState !== 'open') {
@@ -139,6 +162,10 @@ export class RateLimiter {
       multiplier = 2; // Be extra cautious when testing
     }
 
+    if (this.backoffPenalty > 0) {
+      multiplier += this.backoffPenalty * 0.5;
+    }
+
     const delay = Math.min(baseDelay * multiplier, this.maxDelay);
     return Math.max(delay, this.minDelay);
   }
@@ -158,7 +185,9 @@ export class RateLimiter {
       errorCount: this.errorCount,
       circuitState: this.circuitState,
       isThrottled: recentRequests >= this.maxRequestsPerMinute,
-      lastRequestTimestamp: this.lastRequestTimestamp
+      lastRequestTimestamp: this.lastRequestTimestamp,
+      backoffPenalty: this.backoffPenalty,
+      lastResponseMeta: this.lastResponseMeta
     };
   }
 

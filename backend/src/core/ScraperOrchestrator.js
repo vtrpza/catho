@@ -59,7 +59,15 @@ export class ScraperOrchestrator {
       lastAdjustment: 0,
       currentConcurrency: options.defaultConcurrency || 3,
       currentProfileDelay: 2500,
-      rpmLimit: this.rateLimiter.maxRequestsPerMinute
+      rpmLimit: this.rateLimiter.maxRequestsPerMinute,
+      phaseTimings: {
+        lastListingMs: null,
+        lastProfileNavMs: null,
+        lastProfileExtractionMs: null,
+        lastProfileSaveMs: null
+      },
+      lastProfileStatus: null,
+      lastProfileError: null
     };
     this.isExternallyPaused = false;
     this.stopReason = null;
@@ -182,7 +190,9 @@ export class ScraperOrchestrator {
           const previousUniqueCount = progressBeforeExtraction.resumesScraped || 0;
 
           // Extract resumes from current page
+          const listingStart = Date.now();
           const pageResumes = await this.listingExtractor.extract(page, { searchQuery });
+          this.metrics.phaseTimings.lastListingMs = Date.now() - listingStart;
 
           if (pageResumes.length === 0) {
             console.log('⚠️ No resumes found on this page. Finishing...');
@@ -669,16 +679,28 @@ export class ScraperOrchestrator {
       ? Math.round(this.metrics.avgProfileLatencyMs)
       : null;
 
+    const rpmUtilization = limiterStats.maxRequestsPerMinute > 0
+      ? Number((limiterStats.requestsLastMinute / limiterStats.maxRequestsPerMinute).toFixed(2))
+      : 0;
+
+    const phaseTimings = {
+      ...this.metrics.phaseTimings
+    };
+
     this.state.setMetrics({
       profilesPerMinute: throughput,
       avgProfileLatencyMs: averageLatency,
       concurrency: this.metrics.currentConcurrency,
       rpmLimit: limiterStats.maxRequestsPerMinute,
+      rpmUtilization,
       rateLimiter: limiterStats,
       etaMs: this.estimateEta(profilesScraped),
       targetProfilesPerMinute: this.performanceGoal?.targetProfilesPerMin || null,
       targetProfiles: this.performanceGoal?.targetProfiles || null,
-      mode: this.performanceGoal?.mode || null
+      mode: this.performanceGoal?.mode || null,
+      phaseTimings,
+      lastProfileStatus: this.metrics.lastProfileStatus ?? null,
+      lastProfileError: this.metrics.lastProfileError
     });
   }
 
@@ -688,7 +710,13 @@ export class ScraperOrchestrator {
       this.recordThroughputSample();
     }
     this.updateStateMetrics();
-    this.emit('progress', this.state.getProgress());
+    const snapshot = this.state.getProgress();
+    this.emit('progress', snapshot);
+    this.emit('metrics', {
+      searchQuery: this.searchQuery,
+      timestamp: Date.now(),
+      metrics: snapshot.metrics
+    });
   }
 
   async adjustPerformanceIfNeeded() {
@@ -780,20 +808,36 @@ export class ScraperOrchestrator {
       await this.rateLimiter.waitForSlot();
 
       const result = await this.profileExtractor.extract(workerPage, { profileUrl: url });
+      const responseMeta = {
+        status: result.status ?? null,
+        loginRedirect: Boolean(result.loginRedirect),
+        blocked: Boolean(result.blocked)
+      };
 
       if (result.success) {
-        this.rateLimiter.recordRequest();
+        this.rateLimiter.recordRequest(responseMeta);
         this.lastRequestTime = result.requestTime || 0;
       } else {
-        this.rateLimiter.recordError(result.error);
+        this.rateLimiter.recordError(result.error, responseMeta);
         this.errorCount++;
       }
+
+      if (typeof result.requestTime === 'number') {
+        this.metrics.phaseTimings.lastProfileNavMs = result.requestTime;
+      }
+      if (typeof result.extractionTime === 'number') {
+        this.metrics.phaseTimings.lastProfileExtractionMs = result.extractionTime;
+      }
+      this.metrics.lastProfileStatus = responseMeta.status ?? null;
+      this.metrics.lastProfileError = result.success ? null : result.error || null;
 
       return result;
     };
 
     const saveFunction = async (url, data, query) => {
+      const saveStart = Date.now();
       await this.profileRepo.saveFullProfile(url, data, query);
+      this.metrics.phaseTimings.lastProfileSaveMs = Date.now() - saveStart;
       this.state.markProfileScraped(url);
       await this.resumeRepo.updateScrapeAttempt(url, true);
       this.updateAndEmitProgress();

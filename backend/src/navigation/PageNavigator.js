@@ -20,13 +20,18 @@ export class PageNavigator {
 
       const startTime = Date.now();
       await page.goto(url, {
-        waitUntil: 'networkidle2',
+        waitUntil: 'domcontentloaded',
         timeout: 30000
       });
       const requestTime = Date.now() - startTime;
 
-      // Wait for results to load
-      await humanizedWait(page, 3000, 0.3);
+      // Wait for resume tiles to appear when possible
+      try {
+        await page.waitForSelector('article.sc-fvtFIe, article', { timeout: 8000 });
+      } catch {
+        // fallback to a shorter delay only when selector is missing
+        await page.waitForTimeout(600);
+      }
 
       // Simulate human behavior
       await simulateHumanBehavior(page);
@@ -128,10 +133,14 @@ export class PageNavigator {
 
         await Promise.all([
           nextButton.click(),
-          page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
+          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
         ]);
 
-        await page.waitForTimeout(1000);
+        try {
+          await page.waitForSelector('article.sc-fvtFIe, article', { timeout: 7000 });
+        } catch {
+          await page.waitForTimeout(500);
+        }
 
         this.currentPage++;
         this.hasMore = true;

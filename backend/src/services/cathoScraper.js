@@ -337,9 +337,15 @@ export class CathoScraper extends BaseScraper {
       console.log(`\n🔍 Counting results for: "${searchQuery}"`);
 
       await page.goto(searchUrl, {
-        waitUntil: 'networkidle2',
+        waitUntil: 'domcontentloaded',
         timeout: 30000
       });
+
+      try {
+        await page.waitForSelector('.total-results, .results-count, [data-testid="results-count"]', { timeout: 7000 });
+      } catch {
+        await page.waitForSelector('article.sc-fvtFIe, article', { timeout: 7000 }).catch(() => {});
+      }
 
       // Extract total count
       const total = await page.evaluate(() => {

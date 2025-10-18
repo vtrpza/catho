@@ -61,7 +61,8 @@ const bindScraperEvents = (scraper) => {
     navigation: (payload) => broadcast('navigation', payload),
     'filter-applied': (payload) => broadcast('filter-applied', payload),
     stopped: (payload) => broadcast('stopped', payload),
-    control: (payload) => broadcast('control', payload)
+    control: (payload) => broadcast('control', payload),
+    metrics: (payload) => broadcast('metrics', payload)
   };
 
   const entries = Object.entries(handlers).map(([event, handler]) => {
@@ -113,7 +114,16 @@ export const streamScrape = (req, res) => {
   sseClients.add(client);
 
   if (currentScraper) {
-    writeSse(res, 'progress', currentScraper.getProgress());
+    const progressSnapshot = currentScraper.getProgress();
+    writeSse(res, 'progress', progressSnapshot);
+    if (progressSnapshot?.metrics) {
+      writeSse(res, 'metrics', {
+        sessionId: progressSnapshot.sessionId,
+        searchQuery: progressSnapshot.searchQuery,
+        timestamp: Date.now(),
+        metrics: progressSnapshot.metrics
+      });
+    }
   }
 
   const closeHandler = () => cleanupClient(client);

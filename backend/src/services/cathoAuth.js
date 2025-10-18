@@ -60,7 +60,7 @@ export class CathoAuth {
 
       // Navegar para a página de login
       await this.page.goto('https://www.catho.com.br/login/', {
-        waitUntil: 'networkidle2',
+        waitUntil: 'domcontentloaded',
         timeout: 30000
       });
 
@@ -105,7 +105,7 @@ export class CathoAuth {
       if (submitButton) {
         await Promise.all([
           submitButton.click(),
-          this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
+          this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
         ]);
       } else {
         // Tentar submeter o form diretamente
@@ -113,7 +113,7 @@ export class CathoAuth {
           const form = document.querySelector('form');
           if (form) form.submit();
         });
-        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+        await this.page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
       }
 
       // Verificar se o login foi bem-sucedido
@@ -145,9 +145,15 @@ export class CathoAuth {
       console.log(`🔍 Navegando para: ${searchUrl}`);
 
       await this.page.goto(searchUrl, {
-        waitUntil: 'networkidle2',
+        waitUntil: 'domcontentloaded',
         timeout: 30000
       });
+
+      try {
+        await this.page.waitForSelector('article.sc-fvtFIe, article', { timeout: 7000 });
+      } catch {
+        await this.page.waitForTimeout(500);
+      }
 
       return this.page;
     } catch (error) {
@@ -183,6 +189,51 @@ export class CathoAuth {
 
     // Aplicar modo stealth para evitar detecção
     await applyStealthMode(page);
+
+    // Configure interception only once per page
+    if (!page.__cathoRequestInterception) {
+      try {
+        await page.setRequestInterception(true);
+      } catch (error) {
+        console.warn('⚠️ Não foi possível ativar interceptação de requisições:', error.message);
+      }
+
+      const blockedResourceTypes = new Set(['image', 'media', 'font', 'stylesheet', 'eventsource']);
+      const blockedHosts = [
+        'google-analytics.com',
+        'googletagmanager.com',
+        'facebook.net',
+        'doubleclick.net',
+        'static-plataforma.catho.com.br/images',
+        'plataforma.catho.com.br/images'
+      ];
+
+      page.on('request', request => {
+        try {
+          const resourceType = request.resourceType();
+          const url = request.url();
+
+          if (blockedResourceTypes.has(resourceType)) {
+            return request.abort();
+          }
+
+          if (blockedHosts.some(host => url.includes(host))) {
+            return request.abort();
+          }
+
+          return request.continue();
+        } catch (interceptError) {
+          console.warn('⚠️ Falha na interceptação de requisição:', interceptError.message);
+          try {
+            request.continue();
+          } catch {
+            // ignore follow-up failures
+          }
+        }
+      });
+
+      page.__cathoRequestInterception = true;
+    }
 
     // Configurar user agent randomizado
     if (this.fingerprint?.userAgent) {

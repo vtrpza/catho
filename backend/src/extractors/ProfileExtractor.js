@@ -19,17 +19,39 @@ export class ProfileExtractor extends BaseExtractor {
    * @returns {Promise<Object>} {success, data, error}
    */
   async extract(page, context = {}) {
+    let navigationMeta = {
+      status: null,
+      loginRedirect: false,
+      blocked: false
+    };
+    let requestTime = 0;
+    let extractionClockStart = Date.now();
+
     try {
       const { profileUrl } = context;
 
       console.log(`  📄 Accessing profile: ${profileUrl}`);
 
-      const startTime = Date.now();
-      await page.goto(profileUrl, {
-        waitUntil: 'networkidle2',
+      extractionClockStart = Date.now();
+      const response = await page.goto(profileUrl, {
+        waitUntil: 'domcontentloaded',
         timeout: 30000
       });
-      const requestTime = Date.now() - startTime;
+      requestTime = Date.now() - extractionClockStart;
+
+      navigationMeta.status = typeof response?.status === 'function' ? response.status() : null;
+      const finalUrl = page.url() || '';
+      navigationMeta.loginRedirect = /\/login/i.test(finalUrl);
+      navigationMeta.blocked = navigationMeta.status === 429 || navigationMeta.status === 403;
+
+      try {
+        await page.waitForSelector('h1, .candidate-name, button svg[data-testid="SmartphoneIcon"]', {
+          timeout: 8000
+        });
+      } catch {
+        // Allow extraction to proceed when selector is absent but keep a minimal delay
+        await page.waitForTimeout(500);
+      }
 
       // Humanized wait
       await humanizedWait(page, 2000, 0.4);
@@ -331,18 +353,47 @@ export class ProfileExtractor extends BaseExtractor {
       }
 
       console.log(`  ✓ Profile extracted successfully`);
+      const totalElapsed = Date.now() - extractionClockStart;
+      const extractionTime = Math.max(totalElapsed - requestTime, 0);
       return {
         success: true,
         data: profileData,
-        requestTime
+        requestTime,
+        extractionTime,
+        status: navigationMeta.status,
+        loginRedirect: navigationMeta.loginRedirect,
+        blocked: navigationMeta.blocked
       };
 
     } catch (error) {
       this.addError(error, context);
       console.error(`  ❌ Error extracting profile:`, error.message);
+      try {
+        const finalUrl = page.url() || '';
+        navigationMeta.loginRedirect = navigationMeta.loginRedirect || /\/login/i.test(finalUrl);
+      } catch {
+        // ignore url read errors
+      }
+      if (!navigationMeta.status) {
+        const statusMatch = error.message && error.message.match(/(?:status|code)\s*(\d{3})/i);
+        if (statusMatch) {
+          navigationMeta.status = parseInt(statusMatch[1], 10);
+        }
+      }
+      if (!navigationMeta.blocked) {
+        const status = navigationMeta.status;
+        navigationMeta.blocked = status === 429 || status === 403 || navigationMeta.loginRedirect;
+      }
+      const totalElapsed = Date.now() - extractionClockStart;
+      const extractionTime = Math.max(totalElapsed - requestTime, 0);
       return {
         success: false,
-        error: error.message
+        error: error.message,
+        requestTime,
+        extractionTime,
+        status: navigationMeta.status,
+        loginRedirect: navigationMeta.loginRedirect,
+        blocked: navigationMeta.blocked
       };
     }
   }

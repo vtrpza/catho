@@ -15,6 +15,7 @@ export class BatchProcessor {
     this.lastRequestTime = 0;
     this.activeJobs = new Map(); // Track active scraping jobs
     this.pageSetup = options.pageSetup || null;
+    this.workerPool = [];
   }
 
   /**
@@ -76,9 +77,11 @@ export class BatchProcessor {
     let succeeded = 0;
     let failed = 0;
 
-    // Create worker tabs
-    for (let i = 0; i < Math.min(this.concurrency, urls.length); i++) {
-      const worker = this.createWorker(i, queue, scrapeFunction, saveFunction);
+    const requiredWorkers = Math.min(this.concurrency, urls.length);
+    const workerPages = await this.ensureWorkerPool(requiredWorkers);
+
+    for (let i = 0; i < workerPages.length; i++) {
+      const worker = this.runWorker(workerPages[i], i, queue, scrapeFunction, saveFunction);
       workers.push(worker);
     }
 
@@ -103,30 +106,28 @@ export class BatchProcessor {
    * @param {Function} saveFunction - Save function
    * @returns {Promise<Object>} Worker results
    */
-  async createWorker(workerId, queue, scrapeFunction, saveFunction) {
-    let page = null;
+  async runWorker(workerEntry, workerSlot, queue, scrapeFunction, saveFunction) {
+    const { page, id: workerId } = workerEntry;
     let processed = 0;
     let succeeded = 0;
     let failed = 0;
 
     try {
-      // Create a new page for this worker
-      page = await this.browser.newPage();
       if (this.pageSetup) {
         try {
           await this.pageSetup(page);
         } catch (setupError) {
-          console.log(`  ⚠️ Worker ${workerId + 1}: falha ao preparar página (${setupError.message}).`);
+          console.log(`  ⚠️ Worker ${workerSlot + 1}: falha ao preparar página (${setupError.message}).`);
         }
       }
-      console.log(`  👷 Worker ${workerId + 1} iniciado`);
+      console.log(`  👷 Worker ${workerSlot + 1} pronto (page #${workerId + 1})`);
 
       // Process URLs from queue
       while (queue.length > 0) {
         const url = queue.shift();
         if (!url) break;
 
-        const jobId = `worker${workerId}-${processed}`;
+        const jobId = `worker${workerId}-${Date.now()}-${processed}`;
         this.activeJobs.set(jobId, { url, startTime: Date.now() });
 
         try {
@@ -140,11 +141,11 @@ export class BatchProcessor {
             // Save the data
             await saveFunction(url, result.data);
             succeeded++;
-            console.log(`  ✅ Worker ${workerId + 1}: ${url.substring(0, 60)}...`);
+            console.log(`  ✅ Worker ${workerSlot + 1}: ${url.substring(0, 60)}...`);
           } else {
             failed++;
             this.errorCount++;
-            console.log(`  ⚠️ Worker ${workerId + 1} falhou: ${result.error}`);
+            console.log(`  ⚠️ Worker ${workerSlot + 1} falhou: ${result.error}`);
           }
 
           processed++;
@@ -153,7 +154,7 @@ export class BatchProcessor {
           // Adaptive delay between requests for this worker
           if (queue.length > 0) {
             const delay = getAdaptiveDelay(this.profileDelay, this.errorCount, this.lastRequestTime);
-            const workerDelay = delay + (workerId * 200); // Stagger workers slightly
+            const workerDelay = delay + (workerSlot * 200); // Stagger workers slightly
             await humanizedWait(page, workerDelay, 0.3);
 
             // Occasionally simulate human behavior
@@ -165,7 +166,7 @@ export class BatchProcessor {
         } catch (error) {
           failed++;
           this.errorCount++;
-          console.error(`  ❌ Worker ${workerId + 1} erro: ${error.message}`);
+          console.error(`  ❌ Worker ${workerSlot + 1} erro: ${error.message}`);
           this.activeJobs.delete(jobId);
 
           // On error, wait longer before next attempt
@@ -176,18 +177,42 @@ export class BatchProcessor {
         }
       }
 
-      console.log(`  ✓ Worker ${workerId + 1} finalizado: ${succeeded}/${processed} sucessos`);
-
+      console.log(`  ✓ Worker ${workerSlot + 1} finalizado: ${succeeded}/${processed} sucessos`);
     } catch (error) {
-      console.error(`  ❌ Worker ${workerId + 1} erro fatal: ${error.message}`);
-    } finally {
-      // Close the worker page
-      if (page) {
-        await page.close().catch(() => {});
-      }
+      console.error(`  ❌ Worker ${workerSlot + 1} erro fatal: ${error.message}`);
     }
 
     return { processed, succeeded, failed };
+  }
+
+  async ensureWorkerPool(size) {
+    if (!this.browser) return [];
+
+    while (this.workerPool.length < size) {
+      try {
+        const page = await this.browser.newPage();
+        const workerId = this.workerPool.length;
+        this.workerPool.push({ page, id: workerId });
+      } catch (error) {
+        console.error('❌ Falha ao criar worker page:', error.message);
+        break;
+      }
+    }
+
+    return this.workerPool.slice(0, size);
+  }
+
+  async closeAllWorkers() {
+    const pages = this.workerPool.splice(0);
+    await Promise.all(
+      pages.map(async ({ page }) => {
+        try {
+          await page.close();
+        } catch {
+          // ignore close failure
+        }
+      })
+    );
   }
 
   /**

@@ -5,7 +5,7 @@ export async function navigateWithContext(page, url, options = {}) {
   const {
     referer,
     baseHeaders = {},
-    waitUntil = 'networkidle2',
+    waitUntil = 'domcontentloaded',
     timeout = 30000,
     inspectBody = true,
     blockedPatterns = [

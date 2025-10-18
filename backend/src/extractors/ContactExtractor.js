@@ -1,5 +1,11 @@
 import { BaseExtractor } from './BaseExtractor.js';
 import { randomDelay } from '../utils/antiDetection.js';
+import {
+  buildContactOptions,
+  hasVisibleContact,
+  clickContactButton,
+  collectContactValues
+} from '../utils/contactHelpers.js';
 
 /**
  * Extracts contact information (email and phone) by clicking reveal buttons
@@ -41,62 +47,34 @@ export class ContactExtractor extends BaseExtractor {
    */
   async extractPhone(page) {
     try {
-      console.log('  📞 Looking for "Ver telefone" button...');
+      const options = this.phoneOptions || { ...buildContactOptions('phone'), kind: 'phone' };
+      this.phoneOptions = options;
 
-      const phoneButtonClicked = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        const phoneButton = buttons.find(btn => {
-          const text = btn.textContent.toLowerCase();
-          const hasIcon = btn.querySelector('svg[data-testid="SmartphoneIcon"]');
-          return (text.includes('ver telefone') || text.includes('telefone')) && hasIcon;
-        });
-
-        if (phoneButton) {
-          phoneButton.click();
-          return true;
+      const alreadyVisible = await page.evaluate(hasVisibleContact, options).catch(() => false);
+      if (!alreadyVisible) {
+        console.log('  📞 Looking for "Ver telefone" button...');
+        const clicked = await page.evaluate(clickContactButton, options).catch(() => false);
+        if (!clicked) {
+          console.log('  ⚠️ "Ver telefone" button not found');
         }
-        return false;
-      });
+      }
 
-      if (phoneButtonClicked) {
-        console.log('  📞 "Ver telefone" button clicked, waiting for data...');
-
-        // Wait for phone to appear
-        await page.waitForTimeout(randomDelay(2000, 3000));
-
-        // Extract phone after it loads
-        const phone = await page.evaluate(() => {
-          const pageText = document.body.textContent;
-
-          // Brazilian phone patterns
-          const phonePatterns = [
-            /\(?\d{2}\)?\s*9?\d{4}[-\s]?\d{4}/g,
-            /\d{11}/g,
-            /\d{10}/g
-          ];
-
-          for (const pattern of phonePatterns) {
-            const matches = pageText.match(pattern);
-            if (matches && matches.length > 0) {
-              for (const match of matches) {
-                const cleaned = match.replace(/\D/g, '');
-                if (cleaned.length === 10 || cleaned.length === 11) {
-                  return match.trim();
-                }
-              }
-            }
-          }
-          return null;
-        });
-
-        if (phone) {
-          console.log(`  ✅ Phone found: ${phone}`);
-          return phone;
-        } else {
-          console.log(`  ⚠️ Phone not found after clicking`);
+      let waitHandle = null;
+      try {
+        waitHandle = await page.waitForFunction(hasVisibleContact, { timeout: 7000 }, options);
+      } catch {
+        console.log('  ⚠️ Phone information did not become visible in time');
+      } finally {
+        if (waitHandle && typeof waitHandle.dispose === 'function') {
+          await waitHandle.dispose();
         }
-      } else {
-        console.log(`  ⚠️ "Ver telefone" button not found`);
+      }
+
+      const phone = await page.evaluate(collectContactValues, options).catch(() => null);
+      if (phone) {
+        const first = phone.split(',')[0].trim();
+        console.log(`  ✅ Phone found: ${first}`);
+        return first;
       }
 
       return null;
@@ -111,44 +89,34 @@ export class ContactExtractor extends BaseExtractor {
    */
   async extractEmail(page) {
     try {
-      console.log('  📧 Looking for "Ver email" button...');
+      const options = this.emailOptions || { ...buildContactOptions('email'), kind: 'email' };
+      this.emailOptions = options;
 
-      const emailButtonClicked = await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        const emailButton = buttons.find(btn => {
-          const text = btn.textContent.toLowerCase();
-          const hasIcon = btn.querySelector('svg[data-testid="MailOutlineIcon"]');
-          return (text.includes('ver email') || text.includes('ver e-mail') || text.includes('email')) && hasIcon;
-        });
-
-        if (emailButton) {
-          emailButton.click();
-          return true;
+      const alreadyVisible = await page.evaluate(hasVisibleContact, options).catch(() => false);
+      if (!alreadyVisible) {
+        console.log('  📧 Looking for "Ver email" button...');
+        const clicked = await page.evaluate(clickContactButton, options).catch(() => false);
+        if (!clicked) {
+          console.log(`  ⚠️ "Ver email" button not found`);
         }
-        return false;
-      });
+      }
 
-      if (emailButtonClicked) {
-        console.log('  📧 "Ver email" button clicked, waiting for data...');
-
-        // Wait for email to appear
-        await page.waitForTimeout(randomDelay(2000, 3000));
-
-        // Extract email after it loads
-        const email = await page.evaluate(() => {
-          const pageText = document.body.textContent;
-          const emailMatch = pageText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
-          return emailMatch ? emailMatch[0] : null;
-        });
-
-        if (email) {
-          console.log(`  ✅ Email found: ${email}`);
-          return email;
-        } else {
-          console.log(`  ⚠️ Email not found after clicking`);
+      let waitHandle = null;
+      try {
+        waitHandle = await page.waitForFunction(hasVisibleContact, { timeout: 7000 }, options);
+      } catch {
+        console.log('  ⚠️ Email information did not become visible in time');
+      } finally {
+        if (waitHandle && typeof waitHandle.dispose === 'function') {
+          await waitHandle.dispose();
         }
-      } else {
-        console.log(`  ⚠️ "Ver email" button not found`);
+      }
+
+      const email = await page.evaluate(collectContactValues, options).catch(() => null);
+      if (email) {
+        const first = email.split(',')[0].trim();
+        console.log(`  ✅ Email found: ${first}`);
+        return first;
       }
 
       return null;
