@@ -8,7 +8,7 @@ export class ScraperState {
     this.options = options;
 
     this.progress = {
-      status: 'idle', // idle, running, paused, completed, failed
+      status: 'idle', // idle, running, paused, completed, failed, stopped
       currentPage: 0,
       totalPages: options.maxPages || 0,
       resumesScraped: 0,
@@ -23,6 +23,16 @@ export class ScraperState {
     this.errors = [];
     this.resumeUrls = new Set();
     this.processedUrls = new Set();
+    this.metrics = {
+      profilesPerMinute: 0,
+      avgProfileLatencyMs: null,
+      concurrency: null,
+      rpmLimit: null,
+      etaMs: null,
+      targetProfilesPerMinute: null,
+      targetProfiles: null,
+      mode: null
+    };
   }
 
   /**
@@ -48,6 +58,15 @@ export class ScraperState {
     this.progress.status = 'failed';
     this.progress.endTime = Date.now();
     this.addError(error);
+  }
+
+  /**
+   * Mark as stopped (manual interruption)
+   */
+  stop(reason = 'stopped') {
+    this.progress.status = 'stopped';
+    this.progress.stopReason = reason;
+    this.progress.endTime = Date.now();
   }
 
   /**
@@ -134,6 +153,19 @@ export class ScraperState {
   }
 
   /**
+   * Update metrics for progress consumers
+   */
+  setMetrics(partial = {}) {
+    if (!partial || typeof partial !== 'object') {
+      return;
+    }
+    this.metrics = {
+      ...this.metrics,
+      ...partial
+    };
+  }
+
+  /**
    * Get current progress
    */
   getProgress() {
@@ -150,7 +182,11 @@ export class ScraperState {
       errorCount: this.errors.length,
       completionRate: this.progress.profilesTotal > 0
         ? (this.progress.profilesScraped / this.progress.profilesTotal) * 100
-        : 0
+        : 0,
+      metrics: {
+        ...this.metrics,
+        elapsedMs: duration
+      }
     };
   }
 

@@ -16,6 +16,13 @@ export async function initDatabase() {
     driver: sqlite3.Database
   });
 
+  await db.exec('PRAGMA journal_mode = WAL;');
+  await db.exec('PRAGMA synchronous = NORMAL;');
+  await db.exec('PRAGMA temp_store = MEMORY;');
+  await db.exec('PRAGMA cache_size = -16000;');
+  await db.exec('PRAGMA busy_timeout = 5000;');
+  await db.exec('PRAGMA foreign_keys = ON;');
+
   // Criar tabela de currículos (expandida)
   await db.exec(`
     CREATE TABLE IF NOT EXISTS resumes (

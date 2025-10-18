@@ -24,6 +24,15 @@ export const scraperAPI = {
   countResumes: (payload = {}) =>
     api.post('/scrape/count', payload),
 
+  pause: () =>
+    api.post('/scrape/pause'),
+
+  resume: () =>
+    api.post('/scrape/resume'),
+
+  stop: () =>
+    api.post('/scrape/stop'),
+
   createStream: () =>
     new EventSource('/api/scrape/stream'),
 

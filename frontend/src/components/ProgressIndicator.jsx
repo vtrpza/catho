@@ -16,16 +16,64 @@ const CONNECTION_STYLES = {
   error: 'bg-red-100 text-red-700'
 };
 
-export default function ProgressIndicator({ progress, isRunning, streamStatus, session }) {
+export default function ProgressIndicator({
+  progress,
+  isRunning,
+  streamStatus,
+  session,
+  onPause = null,
+  onResume = null,
+  onStop = null
+}) {
   const shouldHide = !isRunning && progress.status === 'idle' && !progress.sessionId;
   if (shouldHide) {
     return null;
   }
 
+  const metrics = progress.metrics || {};
+  const isPaused = progress.status === 'paused';
+  const canPause = typeof onPause === 'function' && progress.status === 'running';
+  const canResume = typeof onResume === 'function' && isPaused;
+  const canStop = typeof onStop === 'function' && (progress.status === 'running' || progress.status === 'paused');
+
+  const formatNumber = (value, fractionDigits = 0) => {
+    if (value === undefined || value === null || Number.isNaN(value)) {
+      return '--';
+    }
+    return Number(value).toLocaleString('pt-BR', {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits
+    });
+  };
+
+  const formatEta = (etaMs) => {
+    if (etaMs === 0) {
+      return 'Concluido';
+    }
+    if (!etaMs || etaMs < 0) {
+      return '--';
+    }
+
+    const totalSeconds = Math.round(etaMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  };
+
   const getStatusText = () => {
     switch (progress.status) {
       case 'running':
         return '🔄 Coletando currículos...';
+      case 'paused':
+        return '⏸️ Coleta pausada';
       case 'completed':
         return '✅ Coleta concluída!';
       case 'error':
@@ -41,6 +89,8 @@ export default function ProgressIndicator({ progress, isRunning, streamStatus, s
     switch (progress.status) {
       case 'running':
         return 'bg-blue-50 border-blue-200';
+      case 'paused':
+        return 'bg-yellow-50 border-yellow-200';
       case 'completed':
         return 'bg-green-50 border-green-200';
       case 'error':
@@ -63,6 +113,50 @@ export default function ProgressIndicator({ progress, isRunning, streamStatus, s
       : null;
 
   const searchLabel = progress.searchQuery || session?.query || '';
+  const avgLatencySeconds = metrics.avgProfileLatencyMs
+    ? metrics.avgProfileLatencyMs / 1000
+    : null;
+
+  const latencyHint = avgLatencySeconds !== null
+    ? `Latencia ~ ${formatNumber(avgLatencySeconds, 1)} s`
+    : null;
+
+  const targetPerMinuteHint = metrics.targetProfilesPerMinute
+    ? `Meta: ${formatNumber(metrics.targetProfilesPerMinute)} p/min`
+    : null;
+
+  const targetProfilesHint = metrics.targetProfiles
+    ? `Meta: ${formatNumber(metrics.targetProfiles)} perfis`
+    : null;
+
+  const rateLimiterHint = metrics.rateLimiter && metrics.rateLimiter.requestsLastMinute !== undefined
+    ? `Ultimo minuto: ${formatNumber(metrics.rateLimiter.requestsLastMinute)}`
+    : null;
+
+  const metricCards = [
+    {
+      label: 'Perfis/min',
+      value: formatNumber(metrics.profilesPerMinute, 1),
+      hint: targetPerMinuteHint
+    },
+    {
+      label: 'Concorrencia',
+      value: formatNumber(metrics.concurrency),
+      hint: latencyHint
+    },
+    {
+      label: 'ETA',
+      value: formatEta(metrics.etaMs),
+      hint: targetProfilesHint
+    },
+    {
+      label: 'Limite RPM',
+      value: formatNumber(metrics.rpmLimit),
+      hint: rateLimiterHint
+    }
+  ];
+
+  const showMetrics = metricCards.some((card) => card.value !== '--' || Boolean(card.hint));
 
   return (
     <div className={`rounded-lg border-2 p-4 mb-6 ${getStatusColor()}`}>
@@ -89,12 +183,45 @@ export default function ProgressIndicator({ progress, isRunning, streamStatus, s
             </p>
           )}
         </div>
-        <span
-          className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold ${connectionStyle}`}
-        >
-          <span className="h-2 w-2 rounded-full bg-current" />
-          {connectionText}
-        </span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`inline-flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-semibold ${connectionStyle}`}
+          >
+            <span className="h-2 w-2 rounded-full bg-current" />
+            {connectionText}
+          </span>
+          {(canPause || canResume || canStop) && (
+            <div className="flex items-center gap-2">
+              {canPause && (
+                <button
+                  type="button"
+                  onClick={onPause}
+                  className="px-3 py-1.5 text-xs font-medium border border-gray-300 rounded-md text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Pausar
+                </button>
+              )}
+              {canResume && (
+                <button
+                  type="button"
+                  onClick={onResume}
+                  className="px-3 py-1.5 text-xs font-medium rounded-md bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Retomar
+                </button>
+              )}
+              {canStop && (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="px-3 py-1.5 text-xs font-medium rounded-md bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Encerrar
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -143,13 +270,36 @@ export default function ProgressIndicator({ progress, isRunning, streamStatus, s
           </div>
         )}
 
-        {durationSeconds !== null && (
-          <div className="flex justify-between text-xs text-gray-500">
-            <span>Duração:</span>
-            <span>{durationSeconds}s</span>
-          </div>
-        )}
-      </div>
+      {durationSeconds !== null && (
+        <div className="flex justify-between text-xs text-gray-500">
+          <span>Duração:</span>
+          <span>{durationSeconds}s</span>
+        </div>
+      )}
+    </div>
+
+      {showMetrics && (
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {metricCards.map((card) => (
+            <div
+              key={card.label}
+              className="bg-white border border-gray-200 rounded-lg p-3 shadow-sm"
+            >
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                {card.label}
+              </p>
+              <p className="text-lg font-semibold text-gray-900 mt-1">
+                {card.value}
+              </p>
+              {card.hint && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {card.hint}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

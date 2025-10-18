@@ -13,6 +13,13 @@ export class SequentialStrategy extends BaseStrategy {
     this.lastRequestTime = 0;
   }
 
+  setProfileDelay(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      return;
+    }
+    this.profileDelay = Math.max(250, Math.floor(value));
+  }
+
   /**
    * Process profile URLs sequentially
    */

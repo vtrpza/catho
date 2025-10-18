@@ -1,5 +1,13 @@
 import express from 'express';
-import { startScrape, getScrapingStatus, countResumes, streamScrape } from '../controllers/scrapeController.js';
+import {
+  startScrape,
+  getScrapingStatus,
+  countResumes,
+  streamScrape,
+  pauseScrape,
+  resumeScrape,
+  stopScrape
+} from '../controllers/scrapeController.js';
 import {
   getResumes,
   getResumeById,
@@ -14,6 +22,9 @@ const router = express.Router();
 // Rotas de scraping
 router.post('/scrape', startScrape);
 router.post('/scrape/count', countResumes);
+router.post('/scrape/pause', pauseScrape);
+router.post('/scrape/resume', resumeScrape);
+router.post('/scrape/stop', stopScrape);
 router.get('/scrape/stream', streamScrape);
 router.get('/status', getScrapingStatus);
 

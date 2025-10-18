@@ -10,16 +10,27 @@ export class ProfileRepository {
    * Save full profile with all related data
    */
   async saveFullProfile(profileUrl, profileData, searchQuery) {
-    try {
-      const { personalData, careerInfo, workExperiences, education, courses, languages, skills, additionalInfo } = profileData;
+    let transactionStarted = false;
+    let resumeId = null;
 
-      // Check if resume exists
+    const {
+      personalData = {},
+      careerInfo = {},
+      workExperiences = [],
+      education = [],
+      courses = [],
+      languages = [],
+      skills = [],
+      additionalInfo = null
+    } = profileData;
+
+    try {
+      await this.db.exec('BEGIN TRANSACTION');
+      transactionStarted = true;
+
       const existing = await this.db.get('SELECT id FROM resumes WHERE profile_url = ?', [profileUrl]);
 
-      let resumeId;
-
       if (existing) {
-        // Update existing resume
         await this.db.run(
           `UPDATE resumes SET
             age = ?, date_of_birth = ?, gender = ?, marital_status = ?,
@@ -49,12 +60,8 @@ export class ProfileRepository {
           ]
         );
         resumeId = existing.id;
-
-        // Clear old related data
         await this.clearRelatedData(resumeId);
-
       } else {
-        // Insert new resume
         const result = await this.db.run(
           `INSERT INTO resumes
            (name, profile_url, search_query, age, date_of_birth, gender, marital_status,
@@ -87,19 +94,24 @@ export class ProfileRepository {
         resumeId = result.lastID;
       }
 
-      // Save related data
-      await this.saveWorkExperiences(resumeId, workExperiences);
-      await this.saveEducation(resumeId, education);
-      await this.saveCourses(resumeId, courses);
-      await this.saveLanguages(resumeId, languages);
-      await this.saveSkills(resumeId, skills);
+      await this.saveWorkExperiences(resumeId, workExperiences || []);
+      await this.saveEducation(resumeId, education || []);
+      await this.saveCourses(resumeId, courses || []);
+      await this.saveLanguages(resumeId, languages || []);
+      await this.saveSkills(resumeId, skills || []);
+
+      await this.db.exec('COMMIT');
+      transactionStarted = false;
 
       return resumeId;
 
     } catch (error) {
+      if (transactionStarted) {
+        await this.db.exec('ROLLBACK').catch(() => {});
+      }
+
       console.error('❌ Error saving full profile:', error.message);
 
-      // Mark error in profile
       try {
         await this.db.run(
           'UPDATE resumes SET profile_scrape_error = ? WHERE profile_url = ?',

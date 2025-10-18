@@ -14,6 +14,27 @@ export class ParallelStrategy extends BaseStrategy {
   }
 
   /**
+   * Dynamically adjust concurrency
+   */
+  setConcurrency(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      return;
+    }
+    const normalized = Math.max(1, Math.floor(value));
+    this.concurrency = normalized;
+  }
+
+  /**
+   * Adjust profile delay
+   */
+  setProfileDelay(value) {
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      return;
+    }
+    this.profileDelay = Math.max(250, Math.floor(value));
+  }
+
+  /**
    * Process profile URLs in parallel
    */
   async process(profileUrls, scrapeFunction, saveFunction, context = {}) {

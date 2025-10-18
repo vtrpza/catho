@@ -17,6 +17,31 @@ export class RateLimiter {
     this.errorCount = 0;
     this.circuitState = 'closed'; // closed, open, half-open
     this.lastCircuitOpen = null;
+    this.lastRequestTimestamp = null;
+  }
+
+  /**
+   * Dynamically update max requests per minute
+   */
+  setMaxRequestsPerMinute(value) {
+    if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
+      return;
+    }
+    const normalized = Math.max(1, Math.floor(value));
+    if (normalized !== this.maxRequestsPerMinute) {
+      this.maxRequestsPerMinute = normalized;
+      console.log(`⚙️ Rate limiter RPM atualizado para ${normalized}`);
+    }
+  }
+
+  /**
+   * Update error threshold at runtime
+   */
+  setErrorThreshold(value) {
+    if (typeof value !== 'number' || Number.isNaN(value) || value <= 0) {
+      return;
+    }
+    this.errorThreshold = Math.floor(value);
   }
 
   /**
@@ -68,7 +93,9 @@ export class RateLimiter {
    * Record a successful request
    */
   recordRequest() {
-    this.requestHistory.push(Date.now());
+    const now = Date.now();
+    this.requestHistory.push(now);
+    this.lastRequestTimestamp = now;
 
     // Reset error count on success
     if (this.errorCount > 0) {
@@ -130,7 +157,8 @@ export class RateLimiter {
       remainingSlots: Math.max(0, this.maxRequestsPerMinute - recentRequests),
       errorCount: this.errorCount,
       circuitState: this.circuitState,
-      isThrottled: recentRequests >= this.maxRequestsPerMinute
+      isThrottled: recentRequests >= this.maxRequestsPerMinute,
+      lastRequestTimestamp: this.lastRequestTimestamp
     };
   }
 

@@ -60,7 +60,8 @@ const bindScraperEvents = (scraper) => {
     page: (payload) => broadcast('page', payload),
     navigation: (payload) => broadcast('navigation', payload),
     'filter-applied': (payload) => broadcast('filter-applied', payload),
-    stopped: (payload) => broadcast('stopped', payload)
+    stopped: (payload) => broadcast('stopped', payload),
+    control: (payload) => broadcast('control', payload)
   };
 
   const entries = Object.entries(handlers).map(([event, handler]) => {
@@ -138,7 +139,12 @@ export const startScrape = async (req, res) => {
       enableParallel = true,
       concurrency = 3,
       scrapeFullProfiles = true,
-      profileDelay = 2500
+      profileDelay = 2500,
+      targetProfilesPerMin,
+      targetProfiles,
+      timeBudgetMinutes,
+      performanceMode,
+      advanced
     } = req.body;
 
     if (!query) {
@@ -168,6 +174,20 @@ export const startScrape = async (req, res) => {
     currentScraper = scraper;
 
     const scrapeOptions = {
+      adaptive: {
+        targetProfilesPerMin: parseInt(targetProfilesPerMin, 10) || undefined,
+        targetProfiles: parseInt(targetProfiles, 10) || undefined,
+        timeBudgetMinutes: parseInt(timeBudgetMinutes, 10) || undefined,
+        mode: performanceMode || 'balanced'
+      },
+      advanced: {
+        maxPages,
+        delay,
+        enableParallel,
+        concurrency,
+        profileDelay,
+        ...(advanced && typeof advanced === 'object' ? advanced : {})
+      },
       maxPages,
       delay,
       salaryRanges,
@@ -221,6 +241,84 @@ export const startScrape = async (req, res) => {
   }
 };
 
+export const pauseScrape = async (_req, res) => {
+  try {
+    if (!currentScraper) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nenhuma coleta ativa para pausar'
+      });
+    }
+
+    await currentScraper.requestPause();
+
+    broadcast('paused', { status: 'paused' });
+
+    res.json({
+      success: true,
+      message: 'Coleta pausada'
+    });
+  } catch (error) {
+    console.error('Erro ao pausar coleta:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+export const resumeScrape = async (_req, res) => {
+  try {
+    if (!currentScraper) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nenhuma coleta pausada'
+      });
+    }
+
+    await currentScraper.requestResume();
+
+    broadcast('resumed', { status: 'running' });
+
+    res.json({
+      success: true,
+      message: 'Coleta retomada'
+    });
+  } catch (error) {
+    console.error('Erro ao retomar coleta:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+export const stopScrape = async (_req, res) => {
+  try {
+    if (!currentScraper) {
+      return res.status(400).json({
+        success: false,
+        error: 'Nenhuma coleta ativa para encerrar'
+      });
+    }
+
+    await currentScraper.requestStop();
+
+    broadcast('stopped', { status: 'stopped' });
+
+    res.json({
+      success: true,
+      message: 'Coleta finalizada'
+    });
+  } catch (error) {
+    console.error('Erro ao encerrar coleta:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
 export const countResumes = async (req, res) => {
   try {
     const { query, ...filters } = req.body;
@@ -267,7 +365,8 @@ export const getScrapingStatus = async (req, res) => {
 
     res.json({
       isRunning: currentScraper.isScraperRunning(),
-      progress: currentScraper.getProgress()
+      progress: currentScraper.getProgress(),
+      goal: currentScraper.getPerformanceGoal()
     });
   } catch (error) {
     console.error('Erro ao obter status:', error);

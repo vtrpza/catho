@@ -19,7 +19,17 @@ const DEFAULT_PROGRESS = {
   errorCount: 0,
   sessionId: null,
   searchQuery: '',
-  duration: 0
+  duration: 0,
+  metrics: {
+    profilesPerMinute: 0,
+    avgProfileLatencyMs: null,
+    concurrency: null,
+    rpmLimit: null,
+    etaMs: null,
+    targetProfilesPerMinute: null,
+    targetProfiles: null,
+    mode: null
+  }
 };
 
 function App() {
@@ -55,7 +65,12 @@ function App() {
     setProgress((previous) => {
       const next = { ...previous };
       Object.entries(partial).forEach(([key, value]) => {
-        if (value !== undefined) {
+        if (key === 'metrics' && value && typeof value === 'object') {
+          next.metrics = {
+            ...next.metrics,
+            ...value
+          };
+        } else if (value !== undefined) {
           next[key] = value;
         }
       });
@@ -368,15 +383,63 @@ function App() {
       }
     });
 
+    eventSource.addEventListener('control', (event) => {
+      const payload = parsePayload(event);
+      if (!payload || !payload.action) return;
+
+      switch (payload.action) {
+        case 'paused':
+          updateProgress({ status: 'paused' });
+          showToast('Coleta pausada', 'info');
+          break;
+        case 'resumed':
+          setIsScraping(true);
+          updateProgress({ status: 'running' });
+          break;
+        case 'concurrency-adjusted':
+          updateProgress({ metrics: { concurrency: payload.value } });
+          break;
+        case 'rpm-adjusted':
+          updateProgress({ metrics: { rpmLimit: payload.value } });
+          break;
+        case 'stop-requested':
+          showToast('Encerrando coleta...', 'info');
+          break;
+        default:
+          break;
+      }
+    });
+
     eventSource.addEventListener('done', (event) => {
       const payload = parsePayload(event) || {};
+      const reason = payload.reason || 'completed';
+      const statusByReason =
+        reason === 'stop_requested'
+          ? 'stopped'
+          : reason === 'time_budget_exceeded'
+            ? 'completed'
+            : reason === 'target_profiles_reached'
+              ? 'completed'
+              : 'completed';
+
       handleProgressUpdate({
         ...payload,
-        status: 'completed'
+        status: statusByReason
       });
+
       setIsScraping(false);
       closeStream('closed');
-      showToast('Coleta concluída com sucesso!', 'success');
+
+      if (reason === 'stop_requested') {
+        showToast('Coleta encerrada pelo usuario', 'info');
+      } else if (reason === 'time_budget_exceeded') {
+        showToast('Tempo limite atingido', 'warning');
+      } else if (reason === 'target_profiles_reached') {
+        showToast('Meta atingida! Coleta concluida.', 'success');
+      } else {
+        showToast('Coleta concluida com sucesso!', 'success');
+      }
+
       loadResumes(1);
     });
 
@@ -392,22 +455,21 @@ function App() {
     });
 
     eventSource.addEventListener('stopped', (event) => {
-      const payload = parsePayload(event);
-      if (payload) {
-        handleProgressUpdate(payload);
-      }
+      const payload = parsePayload(event) || {};
+      const status = payload.status || 'stopped';
+
+      handleProgressUpdate({
+        ...payload,
+        status
+      });
 
       setIsScraping(false);
+      closeStream('closed');
+      loadResumes(1);
 
-      if (payload?.status === 'completed') {
-        closeStream('closed');
-        loadResumes(1);
-        if (payload?.message) {
-          showToast(payload.message, 'info');
-        }
-      } else {
-        handleStreamFailure(payload?.message || 'Coleta interrompida');
-      }
+      const message = payload.message || (status === 'stopped' ? 'Coleta encerrada' : 'Coleta interrompida');
+      const toastType = status === 'stopped' ? 'info' : 'warning';
+      showToast(message, toastType);
     });
   };
 
@@ -445,6 +507,36 @@ function App() {
       } else {
         showToast('Erro ao iniciar busca', 'error');
       }
+    }
+  };
+
+  const pauseScrape = async () => {
+    try {
+      await scraperAPI.pause();
+      updateProgress({ status: 'paused' });
+    } catch (error) {
+      console.error('Erro ao pausar coleta:', error);
+      showToast('Não foi possível pausar a coleta', 'error');
+    }
+  };
+
+  const resumeScrape = async () => {
+    try {
+      await scraperAPI.resume();
+      setIsScraping(true);
+      updateProgress({ status: 'running' });
+    } catch (error) {
+      console.error('Erro ao retomar coleta:', error);
+      showToast('Não foi possível retomar a coleta', 'error');
+    }
+  };
+
+  const stopScrape = async () => {
+    try {
+      await scraperAPI.stop();
+    } catch (error) {
+      console.error('Erro ao encerrar coleta:', error);
+      showToast('Não foi possível encerrar a coleta', 'error');
     }
   };
 
@@ -580,6 +672,9 @@ function App() {
           isRunning={isScraping}
           streamStatus={streamStatus}
           session={sessionInfo}
+          onPause={pauseScrape}
+          onResume={resumeScrape}
+          onStop={stopScrape}
         />
 
         {/* Statistics Cards */}

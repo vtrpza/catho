@@ -85,11 +85,32 @@ const LAST_UPDATED_OPTIONS = [
   { value: 730, label: 'Ate 2 anos' }
 ];
 
+const PERFORMANCE_MODES = [
+  {
+    id: 'conservative',
+    title: 'Conservador',
+    description: 'Menor carga, prioriza seguranca da conta'
+  },
+  {
+    id: 'balanced',
+    title: 'Equilibrado',
+    description: 'Recomendado: equilibra velocidade e estabilidade'
+  },
+  {
+    id: 'fast',
+    title: 'Rapido',
+    description: 'Entrega maxima velocidade com maior uso de recursos'
+  }
+];
+
 export default function SearchForm({ onSearch, isLoading }) {
   const [query, setQuery] = useState('');
   const [maxPages, setMaxPages] = useState(10);
   const [limitPages, setLimitPages] = useState(false);
   const [delay, setDelay] = useState(2000);
+  const [targetProfiles, setTargetProfiles] = useState('2000');
+  const [timeBudgetMinutes, setTimeBudgetMinutes] = useState('10');
+  const [performanceMode, setPerformanceMode] = useState('balanced');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const [salaryRanges, setSalaryRanges] = useState([]);
@@ -114,12 +135,40 @@ export default function SearchForm({ onSearch, isLoading }) {
   };
 
   const buildSearchParams = () => {
+    const trimmedQuery = query.trim();
+    const targetProfilesValue = parseInt(targetProfiles, 10);
+    const timeBudgetValue = parseInt(timeBudgetMinutes, 10);
+    const hasTargetProfiles = Number.isFinite(targetProfilesValue) && targetProfilesValue > 0;
+    const hasTimeBudget = Number.isFinite(timeBudgetValue) && timeBudgetValue > 0;
+    const computedTargetPerMinute =
+      hasTargetProfiles && hasTimeBudget
+        ? Math.max(1, Math.ceil(targetProfilesValue / timeBudgetValue))
+        : null;
+
     const params = {
-      query: query.trim(),
-      delay,
+      query: trimmedQuery,
+      performanceMode,
       enableParallel,
-      concurrency
+      concurrency,
+      delay,
+      advanced: {
+        delay,
+        enableParallel,
+        concurrency
+      }
     };
+
+    if (hasTargetProfiles) {
+      params.targetProfiles = targetProfilesValue;
+    }
+
+    if (hasTimeBudget) {
+      params.timeBudgetMinutes = timeBudgetValue;
+    }
+
+    if (computedTargetPerMinute) {
+      params.targetProfilesPerMin = computedTargetPerMinute;
+    }
 
     if (limitPages && maxPages > 0) {
       params.maxPages = maxPages;
@@ -157,6 +206,16 @@ export default function SearchForm({ onSearch, isLoading }) {
     setLastUpdated('indifferent');
   };
 
+  const targetProfilesNumber = Number.isFinite(parseInt(targetProfiles, 10))
+    ? parseInt(targetProfiles, 10)
+    : null;
+  const timeBudgetNumber = Number.isFinite(parseInt(timeBudgetMinutes, 10))
+    ? parseInt(timeBudgetMinutes, 10)
+    : null;
+  const targetProfilesPerMinute = targetProfilesNumber && timeBudgetNumber && timeBudgetNumber > 0
+    ? Math.max(1, Math.ceil(targetProfilesNumber / timeBudgetNumber))
+    : null;
+
   const activeFiltersCount =
     salaryRanges.length +
     ageRanges.length +
@@ -189,7 +248,7 @@ export default function SearchForm({ onSearch, isLoading }) {
           />
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Alcance da busca
@@ -234,21 +293,81 @@ export default function SearchForm({ onSearch, isLoading }) {
             </div>
           </div>
 
-          <div>
-            <label htmlFor="delay" className="block text-sm font-medium text-gray-700 mb-2">
-              Intervalo (ms)
-            </label>
-            <input
-              type="number"
-              id="delay"
-              value={delay}
-              onChange={(e) => setDelay(parseInt(e.target.value, 10) || 1000)}
-              min="1000"
-              max="10000"
-              step="500"
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-              disabled={isLoading}
-            />
+          <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+            <span className="block text-sm font-medium text-gray-700 mb-2">
+              Meta de coleta
+            </span>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label
+                  htmlFor="targetProfiles"
+                  className="block text-xs font-semibold text-gray-600 uppercase mb-1 tracking-wide"
+                >
+                  Número de perfis
+                </label>
+                <input
+                  type="number"
+                  id="targetProfiles"
+                  min="200"
+                  step="100"
+                  value={targetProfiles}
+                  onChange={(e) => setTargetProfiles(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  disabled={isLoading}
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="timeBudgetMinutes"
+                  className="block text-xs font-semibold text-gray-600 uppercase mb-1 tracking-wide"
+                >
+                  Janela (minutos)
+                </label>
+                <input
+                  type="number"
+                  id="timeBudgetMinutes"
+                  min="5"
+                  step="5"
+                  value={timeBudgetMinutes}
+                  onChange={(e) => setTimeBudgetMinutes(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  disabled={isLoading}
+                />
+              </div>
+            </div>
+            <p className="text-xs text-gray-500 mt-3">
+              {targetProfilesPerMinute
+                ? `Ritmo alvo: cerca de ${targetProfilesPerMinute.toLocaleString('pt-BR')} perfis por minuto.`
+                : 'Informe meta e tempo desejado para calcular o ritmo.'}
+            </p>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Velocidade desejada
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {PERFORMANCE_MODES.map((mode) => {
+              const isSelected = performanceMode === mode.id;
+              return (
+                <button
+                  type="button"
+                  key={mode.id}
+                  onClick={() => setPerformanceMode(mode.id)}
+                  className={`text-left px-4 py-3 rounded-lg border transition-colors ${
+                    isSelected
+                      ? 'border-primary-500 bg-primary-50 text-primary-700 shadow-sm'
+                      : 'border-gray-200 bg-white text-gray-700 hover:border-primary-300 hover:bg-primary-50/40'
+                  }`}
+                  disabled={isLoading}
+                  aria-pressed={isSelected}
+                >
+                  <span className="block text-sm font-semibold">{mode.title}</span>
+                  <span className="block text-xs text-gray-500 mt-1">{mode.description}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -260,7 +379,7 @@ export default function SearchForm({ onSearch, isLoading }) {
             disabled={isLoading}
           >
             <span className="font-medium text-gray-700">
-              Filtros avancados {activeFiltersCount > 0 && `(${activeFiltersCount})`}
+              Filtros e ajustes avancados {activeFiltersCount > 0 && `(${activeFiltersCount})`}
             </span>
             <span>{showAdvanced ? '-' : '+'}</span>
           </button>
@@ -457,7 +576,7 @@ export default function SearchForm({ onSearch, isLoading }) {
             </div>
 
             <div className="border-t border-gray-300 pt-4 mt-4">
-              <h4 className="font-semibold text-gray-700 mb-3">Configuracoes de performance</h4>
+              <h4 className="font-semibold text-gray-700 mb-3">Configuracoes avancadas de performance</h4>
 
               <div className="mb-3">
                 <label className="flex items-center space-x-3">
@@ -499,6 +618,26 @@ export default function SearchForm({ onSearch, isLoading }) {
                   </p>
                 </div>
               )}
+
+              <div className="mt-3">
+                <label htmlFor="delay" className="block text-sm font-medium text-gray-700 mb-2">
+                  Intervalo entre páginas (ms)
+                </label>
+                <input
+                  type="number"
+                  id="delay"
+                  value={delay}
+                  onChange={(e) => setDelay(parseInt(e.target.value, 10) || 1000)}
+                  min="1000"
+                  max="15000"
+                  step="500"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Valores menores aceleram a navegação entre páginas, mas podem aumentar o risco de bloqueio.
+                </p>
+              </div>
             </div>
           </div>
         )}

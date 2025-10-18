@@ -38,6 +38,18 @@ export class CathoScraper extends BaseScraper {
 
     // Orchestrator
     this.orchestrator = null;
+
+    // Adaptive control
+    this.performanceGoal = {
+      targetProfilesPerMin: null,
+      targetProfiles: null,
+      timeBudgetMinutes: null,
+      mode: 'balanced'
+    };
+    this.controlSignals = {
+      stopRequested: false,
+      pauseRequested: false
+    };
   }
 
   /**
@@ -75,6 +87,24 @@ export class CathoScraper extends BaseScraper {
       this.progress.status = 'running';
       this.progress.scraped = 0;
       this.resumes = [];
+
+      // Reset control state
+      this.controlSignals = {
+        stopRequested: false,
+        pauseRequested: false
+      };
+
+      // Extract adaptive configuration
+      const { adaptive = {}, advanced = {} } = options;
+      this.performanceGoal = {
+        targetProfilesPerMin: adaptive?.targetProfilesPerMin ?? null,
+        targetProfiles: adaptive?.targetProfiles ?? null,
+        timeBudgetMinutes: adaptive?.timeBudgetMinutes ?? null,
+        mode: adaptive?.mode || 'balanced'
+      };
+      this.advancedSettings = {
+        ...advanced
+      };
 
       // Initialize components
       await this.initialize();
@@ -153,7 +183,11 @@ export class CathoScraper extends BaseScraper {
         this.sessionId,
         searchQuery,
         searchUrl,
-        options
+        {
+          ...options,
+          adaptive: this.performanceGoal,
+          advanced: this.advancedSettings
+        }
       );
 
       // Update progress for backward compatibility
@@ -192,6 +226,68 @@ export class CathoScraper extends BaseScraper {
 
     } finally {
       await this.auth.close();
+    }
+  }
+
+  /**
+   * Returns current adaptive goal configuration
+   */
+  getPerformanceGoal() {
+    return { ...this.performanceGoal };
+  }
+
+  /**
+   * Access current control signals (for orchestrator checks)
+   */
+  getControlSignals() {
+    return { ...this.controlSignals };
+  }
+
+  /**
+   * Request pause from external controller
+   */
+  async requestPause() {
+    if (!this.isScraperRunning()) {
+      return;
+    }
+    this.controlSignals.pauseRequested = true;
+    this.emit('control', { action: 'pause-requested', timestamp: Date.now() });
+    try {
+      await this.pause();
+    } catch (error) {
+      console.warn('⚠️ Falha ao pausar scraper:', error.message);
+    }
+  }
+
+  /**
+   * Request resume from external controller
+   */
+  async requestResume() {
+    if (!this.isPaused) {
+      return;
+    }
+    this.controlSignals.pauseRequested = false;
+    this.emit('control', { action: 'resume-requested', timestamp: Date.now() });
+    try {
+      await this.resume();
+    } catch (error) {
+      console.warn('⚠️ Falha ao retomar scraper:', error.message);
+    }
+  }
+
+  /**
+   * Request stop from external controller
+   */
+  async requestStop() {
+    if (!this.isScraperRunning()) {
+      return;
+    }
+    this.controlSignals.stopRequested = true;
+    this.emit('control', { action: 'stop-requested', timestamp: Date.now() });
+    try {
+      await this.stop();
+    } catch (error) {
+      console.warn('⚠️ Falha ao encerrar scraper:', error.message);
     }
   }
 
