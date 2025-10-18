@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { scraperAPI } from '../services/api';
 
 const SALARY_RANGES = [
   { id: 1, label: 'Ate R$ 1.000' },
@@ -89,17 +90,20 @@ const PERFORMANCE_MODES = [
   {
     id: 'conservative',
     title: 'Conservador',
-    description: 'Menor carga, prioriza seguranca da conta'
+    description: 'Menor carga, prioriza seguranca da conta (~120 perfis/min)',
+    targetProfilesPerMinute: 120
   },
   {
     id: 'balanced',
     title: 'Equilibrado',
-    description: 'Recomendado: equilibra velocidade e estabilidade'
+    description: 'Recomendado: equilibra velocidade e estabilidade (~220 perfis/min)',
+    targetProfilesPerMinute: 220
   },
   {
     id: 'fast',
     title: 'Rapido',
-    description: 'Entrega maxima velocidade com maior uso de recursos'
+    description: 'Entrega maxima velocidade com maior uso de recursos (~320 perfis/min)',
+    targetProfilesPerMinute: 320
   }
 ];
 
@@ -108,10 +112,14 @@ export default function SearchForm({ onSearch, isLoading }) {
   const [maxPages, setMaxPages] = useState(10);
   const [limitPages, setLimitPages] = useState(false);
   const [delay, setDelay] = useState(2000);
+  const [goalMode, setGoalMode] = useState('all'); // 'all' | 'target'
   const [targetProfiles, setTargetProfiles] = useState('2000');
-  const [timeBudgetMinutes, setTimeBudgetMinutes] = useState('10');
   const [performanceMode, setPerformanceMode] = useState('balanced');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [goalError, setGoalError] = useState(null);
+  const [countStatus, setCountStatus] = useState('idle'); // idle | loading | success | error
+  const [countResult, setCountResult] = useState(null);
+  const [countError, setCountError] = useState(null);
 
   const [salaryRanges, setSalaryRanges] = useState([]);
   const [ageRanges, setAgeRanges] = useState([]);
@@ -134,55 +142,57 @@ export default function SearchForm({ onSearch, isLoading }) {
     }
   };
 
-  const buildSearchParams = () => {
+  const selectedMode =
+    PERFORMANCE_MODES.find((mode) => mode.id === performanceMode) || PERFORMANCE_MODES[1];
+  const targetProfilesPerMinute = selectedMode?.targetProfilesPerMinute ?? 220;
+  const parsedTargetProfiles = parseInt(targetProfiles, 10);
+  const hasTargetProfiles = Number.isFinite(parsedTargetProfiles) && parsedTargetProfiles > 0;
+  const isCounting = countStatus === 'loading';
+
+  const buildFilterPayload = () => {
     const trimmedQuery = query.trim();
-    const targetProfilesValue = parseInt(targetProfiles, 10);
-    const timeBudgetValue = parseInt(timeBudgetMinutes, 10);
-    const hasTargetProfiles = Number.isFinite(targetProfilesValue) && targetProfilesValue > 0;
-    const hasTimeBudget = Number.isFinite(timeBudgetValue) && timeBudgetValue > 0;
-    const computedTargetPerMinute =
-      hasTargetProfiles && hasTimeBudget
-        ? Math.max(1, Math.ceil(targetProfilesValue / timeBudgetValue))
-        : null;
+    const filters = {
+      query: trimmedQuery
+    };
+
+    if (salaryRanges.length > 0) filters.salaryRanges = salaryRanges;
+    if (ageRanges.length > 0) filters.ageRanges = ageRanges;
+    if (gender !== 'ambos') filters.gender = gender;
+    if (professionalAreas.length > 0) filters.professionalAreas = professionalAreas;
+    if (hierarchicalLevels.length > 0) filters.hierarchicalLevels = hierarchicalLevels;
+    if (educationLevels.length > 0) filters.educationLevels = educationLevels;
+    if (candidateSituation !== 'indifferent') filters.candidateSituation = candidateSituation;
+    if (disabilityStatus !== 'indifferent') filters.disabilityStatus = disabilityStatus;
+    if (lastUpdated !== 'indifferent') filters.lastUpdated = parseInt(lastUpdated, 10);
+
+    return filters;
+  };
+
+  const buildSearchParams = () => {
+    const filters = buildFilterPayload();
 
     const params = {
-      query: trimmedQuery,
+      ...filters,
       performanceMode,
       enableParallel,
       concurrency,
       delay,
+      targetProfilesPerMin: targetProfilesPerMinute,
       advanced: {
         delay,
         enableParallel,
-        concurrency
+        concurrency,
+        goalMode
       }
     };
-
-    if (hasTargetProfiles) {
-      params.targetProfiles = targetProfilesValue;
-    }
-
-    if (hasTimeBudget) {
-      params.timeBudgetMinutes = timeBudgetValue;
-    }
-
-    if (computedTargetPerMinute) {
-      params.targetProfilesPerMin = computedTargetPerMinute;
-    }
 
     if (limitPages && maxPages > 0) {
       params.maxPages = maxPages;
     }
 
-    if (salaryRanges.length > 0) params.salaryRanges = salaryRanges;
-    if (ageRanges.length > 0) params.ageRanges = ageRanges;
-    if (gender !== 'ambos') params.gender = gender;
-    if (professionalAreas.length > 0) params.professionalAreas = professionalAreas;
-    if (hierarchicalLevels.length > 0) params.hierarchicalLevels = hierarchicalLevels;
-    if (educationLevels.length > 0) params.educationLevels = educationLevels;
-    if (candidateSituation !== 'indifferent') params.candidateSituation = candidateSituation;
-    if (disabilityStatus !== 'indifferent') params.disabilityStatus = disabilityStatus;
-    if (lastUpdated !== 'indifferent') params.lastUpdated = parseInt(lastUpdated, 10);
+    if (goalMode === 'target' && hasTargetProfiles) {
+      params.targetProfiles = parsedTargetProfiles;
+    }
 
     return params;
   };
@@ -190,8 +200,51 @@ export default function SearchForm({ onSearch, isLoading }) {
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!query.trim()) return;
+    if (goalMode === 'target' && !hasTargetProfiles) {
+      setGoalError('Informe um numero valido para encerrar a coleta.');
+      return;
+    }
+
+    setGoalError(null);
+    setCountStatus('idle');
+    setCountResult(null);
+    setCountError(null);
+
     const searchParams = buildSearchParams();
     onSearch(searchParams);
+  };
+
+  const handleEstimateCount = async () => {
+    if (!query.trim()) {
+      setGoalError('Informe o cargo ou palavra-chave antes de estimar.');
+      return;
+    }
+
+    try {
+      setGoalError(null);
+      setCountStatus('loading');
+      setCountResult(null);
+      setCountError(null);
+
+      const payload = buildFilterPayload();
+      const response = await scraperAPI.countResumes(payload);
+      const total = response.data?.total ?? 0;
+      setCountResult(total);
+      setCountStatus('success');
+    } catch (error) {
+      console.error('Falha ao estimar total de perfis:', error);
+      setCountStatus('error');
+      const message = error.response?.data?.error || 'Nao foi possivel estimar a quantidade de perfis.';
+      setCountError(message);
+    }
+  };
+
+  const handleGoalModeSelection = (mode) => {
+    setGoalMode(mode);
+    setGoalError(null);
+    setCountStatus('idle');
+    setCountResult(null);
+    setCountError(null);
   };
 
   const clearFilters = () => {
@@ -205,16 +258,6 @@ export default function SearchForm({ onSearch, isLoading }) {
     setDisabilityStatus('indifferent');
     setLastUpdated('indifferent');
   };
-
-  const targetProfilesNumber = Number.isFinite(parseInt(targetProfiles, 10))
-    ? parseInt(targetProfiles, 10)
-    : null;
-  const timeBudgetNumber = Number.isFinite(parseInt(timeBudgetMinutes, 10))
-    ? parseInt(timeBudgetMinutes, 10)
-    : null;
-  const targetProfilesPerMinute = targetProfilesNumber && timeBudgetNumber && timeBudgetNumber > 0
-    ? Math.max(1, Math.ceil(targetProfilesNumber / timeBudgetNumber))
-    : null;
 
   const activeFiltersCount =
     salaryRanges.length +
@@ -294,52 +337,103 @@ export default function SearchForm({ onSearch, isLoading }) {
           </div>
 
           <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-            <span className="block text-sm font-medium text-gray-700 mb-2">
-              Meta de coleta
-            </span>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label
-                  htmlFor="targetProfiles"
-                  className="block text-xs font-semibold text-gray-600 uppercase mb-1 tracking-wide"
-                >
-                  Número de perfis
-                </label>
-                <input
-                  type="number"
-                  id="targetProfiles"
-                  min="200"
-                  step="100"
-                  value={targetProfiles}
-                  onChange={(e) => setTargetProfiles(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  disabled={isLoading}
-                />
-              </div>
-              <div>
-                <label
-                  htmlFor="timeBudgetMinutes"
-                  className="block text-xs font-semibold text-gray-600 uppercase mb-1 tracking-wide"
-                >
-                  Janela (minutos)
-                </label>
-                <input
-                  type="number"
-                  id="timeBudgetMinutes"
-                  min="5"
-                  step="5"
-                  value={timeBudgetMinutes}
-                  onChange={(e) => setTimeBudgetMinutes(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                  disabled={isLoading}
-                />
-              </div>
+            <div className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-gray-700">Meta de coleta</span>
+              <p className="text-xs text-gray-500">
+                Escolha se deseja coletar o maximo possivel ou encerrar automaticamente apos atingir um total aproximado.
+              </p>
             </div>
-            <p className="text-xs text-gray-500 mt-3">
-              {targetProfilesPerMinute
-                ? `Ritmo alvo: cerca de ${targetProfilesPerMinute.toLocaleString('pt-BR')} perfis por minuto.`
-                : 'Informe meta e tempo desejado para calcular o ritmo.'}
-            </p>
+
+            <div className="mt-4 space-y-3">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="goalMode"
+                  value="all"
+                  checked={goalMode === 'all'}
+                  onChange={() => handleGoalModeSelection('all')}
+                  className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500"
+                  disabled={isLoading}
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-800">Coletar o máximo possivel</span>
+                  <p className="text-xs text-gray-500">
+                    O coletor continua ate acabarem os resultados ou voce encerrar manualmente.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="radio"
+                  name="goalMode"
+                  value="target"
+                  checked={goalMode === 'target'}
+                  onChange={() => handleGoalModeSelection('target')}
+                  className="mt-1 h-4 w-4 text-primary-600 focus:ring-primary-500"
+                  disabled={isLoading}
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-800">Encerrar após atingir um total aproximado</span>
+                  <p className="text-xs text-gray-500">
+                    Informe um numero de perfis que atenda a sua necessidade. Use a estimativa para entender o volume disponível.
+                  </p>
+                </div>
+              </label>
+
+              {goalMode === 'target' && (
+                <div className="pl-7 space-y-2">
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="number"
+                      id="targetProfiles"
+                      min="100"
+                      step="100"
+                      value={targetProfiles}
+                      onChange={(e) => {
+                        setTargetProfiles(e.target.value);
+                        setGoalError(null);
+                      }}
+                      className="flex-1 px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      placeholder="Ex: 2000"
+                      disabled={isLoading}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleEstimateCount}
+                      className={`px-4 py-2 text-sm font-semibold rounded-md border transition-colors ${
+                        isCounting
+                          ? 'border-gray-300 text-gray-500 bg-white'
+                          : 'border-primary-500 text-primary-600 bg-white hover:bg-primary-50'
+                      }`}
+                      disabled={isLoading || isCounting}
+                    >
+                      {isCounting ? 'Estimando...' : 'Estimar total'}
+                    </button>
+                  </div>
+                  {goalError && (
+                    <p className="text-xs text-red-600">{goalError}</p>
+                  )}
+                  {countStatus === 'success' && countResult !== null && (
+                    <p className="text-xs text-green-700">
+                      Encontramos aproximadamente {countResult.toLocaleString('pt-BR')} perfis para esta busca.
+                    </p>
+                  )}
+                  {countStatus === 'error' && countError && (
+                    <p className="text-xs text-red-600">{countError}</p>
+                  )}
+                  {countStatus === 'loading' && (
+                    <p className="text-xs text-gray-500">Consultando quantidade de perfis...</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 rounded-md border border-primary-100 bg-white px-4 py-3">
+              <p className="text-xs text-primary-700">
+                Modo {selectedMode.title}: miramos cerca de {targetProfilesPerMinute.toLocaleString('pt-BR')} perfis por minuto. Ajuste a velocidade abaixo caso precise mudar o ritmo.
+              </p>
+            </div>
           </div>
         </div>
 
