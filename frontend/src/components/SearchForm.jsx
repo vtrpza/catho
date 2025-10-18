@@ -93,7 +93,10 @@ export default function SearchForm({ onSearch, isLoading }) {
   const [limitPages, setLimitPages] = useState(false);
   const [maxPages, setMaxPages] = useState(10);
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> parent of 3c34f2a (0)
   const [goalMode, setGoalMode] = useState('all'); // 'all' | 'target'
   const [targetProfiles, setTargetProfiles] = useState('2000');
   const [performanceMode, setPerformanceMode] = useState('balanced');
