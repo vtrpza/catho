@@ -199,6 +199,9 @@ export class RateLimiter {
     this.errorCount = 0;
     this.circuitState = 'closed';
     this.lastCircuitOpen = null;
+    this.backoffPenalty = 0;
+    this.lastResponseMeta = null;
+    this.lastRequestTimestamp = null;
     console.log('✓ Rate limiter reset');
   }
 
@@ -209,6 +212,7 @@ export class RateLimiter {
     this.circuitState = 'closed';
     this.errorCount = 0;
     this.lastCircuitOpen = null;
+    this.backoffPenalty = 0;
     console.log('✓ Circuit breaker manually closed');
   }
 }

@@ -42,7 +42,21 @@ export class ProfileExtractor extends BaseExtractor {
       navigationMeta.status = typeof response?.status === 'function' ? response.status() : null;
       const finalUrl = page.url() || '';
       navigationMeta.loginRedirect = /\/login/i.test(finalUrl);
-      navigationMeta.blocked = navigationMeta.status === 429 || navigationMeta.status === 403;
+      navigationMeta.blocked = navigationMeta.status === 429
+        || navigationMeta.status === 403
+        || navigationMeta.status === 401;
+
+      if (navigationMeta.loginRedirect || navigationMeta.blocked) {
+        return {
+          success: false,
+          error: navigationMeta.loginRedirect ? 'login_required' : 'access_blocked',
+          requestTime,
+          extractionTime: 0,
+          status: navigationMeta.status,
+          loginRedirect: navigationMeta.loginRedirect,
+          blocked: navigationMeta.blocked
+        };
+      }
 
       // Minimal wait for content - reduced from 8s to 3s
       try {
@@ -54,6 +68,35 @@ export class ProfileExtractor extends BaseExtractor {
         await page.waitForTimeout(200);
       }
 
+      // Humanized wait
+      await humanizedWait(page, 2000, 0.4);
+
+      // Simulate reading the profile
+      await simulateHumanBehavior(page);
+
+      const loginWallDetected = await page.evaluate(() => {
+        try {
+          const text = document.body ? (document.body.innerText || '') : '';
+          const hasLoginForm = Boolean(document.querySelector('form[action*="login"], form[action*="entrar"], form[action*="/Login"]'));
+          if (hasLoginForm) return true;
+          return /fa\u00e7a seu login|entre para continuar|acesse sua conta|login para continuar|fa\u00e7a login/i.test(text);
+        } catch (err) {
+          return false;
+        }
+      }).catch(() => false);
+
+      if (loginWallDetected) {
+        navigationMeta.loginRedirect = true;
+        return {
+          success: false,
+          error: 'login_required',
+          requestTime,
+          extractionTime: 0,
+          status: navigationMeta.status,
+          loginRedirect: true,
+          blocked: false
+        };
+      }
       // Extract contact info by clicking buttons
       const contactInfo = await this.contactExtractor.extract(page, context);
 
@@ -377,7 +420,7 @@ export class ProfileExtractor extends BaseExtractor {
       }
       if (!navigationMeta.blocked) {
         const status = navigationMeta.status;
-        navigationMeta.blocked = status === 429 || status === 403 || navigationMeta.loginRedirect;
+        navigationMeta.blocked = status === 429 || status === 403 || status === 401 || navigationMeta.loginRedirect;
       }
       const totalElapsed = Date.now() - extractionClockStart;
       const extractionTime = Math.max(totalElapsed - requestTime, 0);

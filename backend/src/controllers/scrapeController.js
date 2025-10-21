@@ -1,4 +1,9 @@
 import { CathoScraper } from '../services/cathoScraper.js';
+import {
+  SCRAPER_CONCURRENCY,
+  SCRAPER_PROFILE_DELAY_MS,
+  SCRAPER_PAGE_DELAY_MS
+} from '../config/scraperConfig.js';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: '../.env' });
@@ -131,12 +136,20 @@ export const streamScrape = (req, res) => {
   req.on('end', closeHandler);
 };
 
+const normalizePositiveInt = (value, fallback, { min = 1, max = 12 } = {}) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return Math.max(min, Math.min(max, fallback));
+  }
+  return Math.max(min, Math.min(max, Math.floor(parsed)));
+};
+
 export const startScrape = async (req, res) => {
   try {
     const {
       query,
       maxPages,
-      delay = 2000,
+      delay = SCRAPER_PAGE_DELAY_MS,
       salaryRanges,
       ageRanges,
       gender,
@@ -148,12 +161,13 @@ export const startScrape = async (req, res) => {
       disabilityStatus = 'indifferent',
       enableParallel = true,
       scrapeFullProfiles = true,
-      profileDelay = 2500,
+      profileDelay = SCRAPER_PROFILE_DELAY_MS,
       targetProfilesPerMin,
       targetProfiles,
       timeBudgetMinutes,
       performanceMode,
-      advanced
+      advanced,
+      concurrency
     } = req.body;
 
     if (!query) {
@@ -182,7 +196,10 @@ export const startScrape = async (req, res) => {
     currentScraperCleanup = bindScraperEvents(scraper);
     currentScraper = scraper;
 
-    const workerCount = 21;
+    const workerCount = normalizePositiveInt(
+      concurrency,
+      SCRAPER_CONCURRENCY
+    );
 
     const scrapeOptions = {
       adaptive: {

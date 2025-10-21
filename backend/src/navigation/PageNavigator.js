@@ -20,18 +20,42 @@ export class PageNavigator {
 
       const startTime = Date.now();
 
-      // Add timeout wrapper to prevent infinite hangs
+      // Add timeout wrapper to prevent infinite hangs while preserving response metadata
+      let timeoutHandle;
       const navigationPromise = page.goto(url, {
         waitUntil: 'domcontentloaded',
         timeout: 20000 // Reduced from 30s to 20s
       });
 
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Navigation timeout exceeded')), 25000)
-      );
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error('Navigation timeout exceeded')), 25000);
+      });
 
-      await Promise.race([navigationPromise, timeoutPromise]);
+      let response;
+      try {
+        response = await Promise.race([navigationPromise, timeoutPromise]);
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
+
       const requestTime = Date.now() - startTime;
+      const status = typeof response?.status === 'function' ? response.status() : null;
+      const finalUrl = page.url() || '';
+      const loginRedirect = /\/login/i.test(finalUrl);
+      const blocked = status === 401 || status === 403;
+
+      if (loginRedirect || blocked) {
+        return {
+          success: false,
+          error: 'login_redirect',
+          loginRedirect: true,
+          blocked,
+          status,
+          requestTime
+        };
+      }
 
       // Wait for resume tiles to appear when possible
       try {
@@ -46,7 +70,7 @@ export class PageNavigator {
 
       this.currentPage = pageNumber;
 
-      return { success: true, requestTime };
+      return { success: true, requestTime, status };
     } catch (error) {
       console.error(`❌ Error navigating to search page ${pageNumber}:`, error.message);
       return { success: false, error: error.message };
@@ -136,13 +160,36 @@ export class PageNavigator {
 
         if (!buttonExists) {
           this.hasMore = false;
-          return { success: false, reason: 'no_next_button' };
+          if (nextButton) {
+            await nextButton.dispose().catch(() => {});
+          }
+          return { success: false, error: 'next_button_not_found' };
         }
 
-        await Promise.all([
-          nextButton.click(),
-          page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
-        ]);
+        const navigationPromise = page
+          .waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 })
+          .catch(() => null);
+
+        await nextButton.click();
+        const response = await navigationPromise;
+
+        const status = typeof response?.status === 'function' ? response.status() : null;
+        const finalUrl = page.url() || '';
+        const loginRedirect = /\/login/i.test(finalUrl);
+        const blocked = status === 401 || status === 403;
+
+        if (loginRedirect || blocked) {
+          if (nextButton) {
+            await nextButton.dispose().catch(() => {});
+          }
+          return {
+            success: false,
+            error: 'login_redirect',
+            loginRedirect: true,
+            blocked,
+            status
+          };
+        }
 
         try {
           await page.waitForSelector('article.sc-fvtFIe, article', { timeout: 7000 });
@@ -152,7 +199,10 @@ export class PageNavigator {
 
         this.currentPage++;
         this.hasMore = true;
-        return { success: true };
+        if (nextButton) {
+          await nextButton.dispose().catch(() => {});
+        }
+        return { success: true, status };
 
       } catch (error) {
         console.error(`❌ Error going to next page (attempt ${attempt + 1}):`, error.message);

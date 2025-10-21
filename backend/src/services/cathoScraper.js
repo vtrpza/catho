@@ -8,6 +8,12 @@ import { ResumeRepository } from '../persistence/ResumeRepository.js';
 import { ProfileRepository } from '../persistence/ProfileRepository.js';
 import { ListingExtractor } from '../extractors/ListingExtractor.js';
 import { ProfileExtractor } from '../extractors/ProfileExtractor.js';
+import {
+  SCRAPER_MAX_REQUESTS_PER_MINUTE,
+  SCRAPER_CONCURRENCY,
+  SCRAPER_PROFILE_DELAY_MS,
+  SCRAPER_PAGE_DELAY_MS
+} from '../config/scraperConfig.js';
 
 /**
  * Catho Scraper - Refactored with Clean Architecture
@@ -63,13 +69,20 @@ export class CathoScraper extends BaseScraper {
     this.profileRepo = new ProfileRepository(db);
 
     // Initialize orchestrator
-    this.orchestrator = new ScraperOrchestrator(this.auth, {
-      resumeRepo: this.resumeRepo,
-      profileRepo: this.profileRepo
-    }, {
-      maxRequestsPerMinute: 21,
-      errorThreshold: 5
-    });
+    this.orchestrator = new ScraperOrchestrator(
+      this.auth,
+      {
+        resumeRepo: this.resumeRepo,
+        profileRepo: this.profileRepo
+      },
+      {
+        maxRequestsPerMinute: SCRAPER_MAX_REQUESTS_PER_MINUTE,
+        errorThreshold: 5,
+        defaultConcurrency: SCRAPER_CONCURRENCY,
+        defaultProfileDelay: SCRAPER_PROFILE_DELAY_MS,
+        defaultPageDelay: SCRAPER_PAGE_DELAY_MS
+      }
+    );
 
     // Set emitter for orchestrator
     this.orchestrator.setEmitter(this);
@@ -179,12 +192,19 @@ export class CathoScraper extends BaseScraper {
       this.setupOrchestratorEvents();
 
       // Run orchestration
+      const normalizedOptions = {
+        ...options,
+        delay: options.delay ?? SCRAPER_PAGE_DELAY_MS,
+        profileDelay: options.profileDelay ?? SCRAPER_PROFILE_DELAY_MS,
+        concurrency: options.concurrency ?? SCRAPER_CONCURRENCY
+      };
+
       const result = await this.orchestrator.orchestrate(
         this.sessionId,
         searchQuery,
         searchUrl,
         {
-          ...options,
+          ...normalizedOptions,
           adaptive: this.performanceGoal,
           advanced: this.advancedSettings
         }
@@ -335,6 +355,9 @@ export class CathoScraper extends BaseScraper {
       const page = this.auth.getPage();
 
       console.log(`\n🔍 Counting results for: "${searchQuery}"`);
+
+      await this.auth.ensureAuthenticated(page);
+      await this.auth.applySessionTo(page);
 
       await page.goto(searchUrl, {
         waitUntil: 'domcontentloaded',

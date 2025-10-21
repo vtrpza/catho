@@ -7,6 +7,13 @@ import { RateLimiter } from '../queue/RateLimiter.js';
 import { SequentialStrategy } from '../scrapers/strategies/SequentialStrategy.js';
 import { ParallelStrategy } from '../scrapers/strategies/ParallelStrategy.js';
 import { humanizedWait, simulateHumanBehavior, getAdaptiveDelay } from '../utils/antiDetection.js';
+import {
+  SCRAPER_CONCURRENCY,
+  SCRAPER_MAX_REQUESTS_PER_MINUTE,
+  SCRAPER_PROFILE_DELAY_MS,
+  SCRAPER_PAGE_DELAY_MS,
+  SCRAPER_SESSION_REFRESH_INTERVAL_MS
+} from '../config/scraperConfig.js';
 
 /**
  * Orchestrates the entire scraping workflow
@@ -18,6 +25,12 @@ export class ScraperOrchestrator {
     this.resumeRepo = repositories.resumeRepo;
     this.profileRepo = repositories.profileRepo;
     this.options = options;
+    this.defaults = {
+      concurrency: options.defaultConcurrency ?? SCRAPER_CONCURRENCY,
+      profileDelay: options.defaultProfileDelay ?? SCRAPER_PROFILE_DELAY_MS,
+      pageDelay: options.defaultPageDelay ?? SCRAPER_PAGE_DELAY_MS,
+      maxRequestsPerMinute: options.maxRequestsPerMinute ?? SCRAPER_MAX_REQUESTS_PER_MINUTE
+    };
 
     // Create components
     this.listingExtractor = new ListingExtractor();
@@ -25,7 +38,7 @@ export class ScraperOrchestrator {
     this.navigator = new PageNavigator();
     this.taskQueue = new TaskQueue();
     this.rateLimiter = new RateLimiter({
-      maxRequestsPerMinute: options.maxRequestsPerMinute || 30,
+      maxRequestsPerMinute: this.defaults.maxRequestsPerMinute,
       errorThreshold: options.errorThreshold || 5
     });
 
@@ -46,10 +59,27 @@ export class ScraperOrchestrator {
       timeBudgetMinutes: null,
       mode: 'balanced'
     };
+    const clampConcurrency = (value) => Math.max(1, Math.min(6, Math.round(value)));
+    const baseConcurrency = clampConcurrency(this.defaults.concurrency);
     this.modePresets = {
-      conservative: { minConcurrency: 21, maxConcurrency: 21, rpmMultiplier: 1, profileDelayMultiplier: 1.1 },
-      balanced: { minConcurrency: 21, maxConcurrency: 21, rpmMultiplier: 1, profileDelayMultiplier: 1 },
-      fast: { minConcurrency: 21, maxConcurrency: 21, rpmMultiplier: 1, profileDelayMultiplier: 0.9 }
+      conservative: {
+        minConcurrency: clampConcurrency(Math.max(1, baseConcurrency - 1)),
+        maxConcurrency: clampConcurrency(baseConcurrency),
+        rpmMultiplier: 0.85,
+        profileDelayMultiplier: 1.2
+      },
+      balanced: {
+        minConcurrency: baseConcurrency,
+        maxConcurrency: clampConcurrency(baseConcurrency + 1),
+        rpmMultiplier: 1,
+        profileDelayMultiplier: 1
+      },
+      fast: {
+        minConcurrency: clampConcurrency(baseConcurrency + 1),
+        maxConcurrency: clampConcurrency(baseConcurrency + 2),
+        rpmMultiplier: 1.15,
+        profileDelayMultiplier: 0.85
+      }
     };
     this.metrics = {
       samples: [],
@@ -57,8 +87,8 @@ export class ScraperOrchestrator {
       currentProfilesPerMin: 0,
       avgProfileLatencyMs: null,
       lastAdjustment: 0,
-      currentConcurrency: options.defaultConcurrency || 21,
-      currentProfileDelay: 2500,
+      currentConcurrency: this.defaults.concurrency,
+      currentProfileDelay: this.defaults.profileDelay,
       rpmLimit: this.rateLimiter.maxRequestsPerMinute,
       phaseTimings: {
         lastListingMs: null,
@@ -71,6 +101,8 @@ export class ScraperOrchestrator {
     };
     this.isExternallyPaused = false;
     this.stopReason = null;
+    this.reauthLock = null;
+    this.authFailureCount = 0;
   }
 
   /**
@@ -93,6 +125,139 @@ export class ScraperOrchestrator {
     }
   }
 
+  async navigateWithAuth(page, navigateFn, context = {}) {
+    const maxAttempts = 2;
+    let attempt = 0;
+
+    if (!page) {
+      return { success: false, error: 'no_page_available' };
+    }
+
+    while (attempt < maxAttempts) {
+      try {
+        await this.auth.ensureAuthenticated(page, { forceCheck: attempt > 0 });
+      } catch (error) {
+        console.warn('⚠️ Não foi possível validar a sessão antes da navegação:', error.message);
+      }
+
+      try {
+        await this.auth.applySessionTo(page);
+      } catch (error) {
+        console.warn('⚠️ Não foi possível revalidar sessão da página:', error.message);
+      }
+
+      const result = await navigateFn();
+      if (result?.success) {
+        return result;
+      }
+
+      const loginRedirect = Boolean(result?.loginRedirect);
+      const blocked = Boolean(result?.blocked);
+      const reasonLabel = context.reason || (loginRedirect ? 'navigation_login_redirect' : 'navigation_blocked');
+
+      if (loginRedirect || blocked || /login/i.test(String(result?.error || ''))) {
+        const recovered = await this.handleAuthLoss({
+          ...context,
+          page,
+          reason: reasonLabel,
+          status: result?.status ?? null
+        });
+        if (!recovered) {
+          return {
+            success: false,
+            error: result?.error || 'reauthentication_failed',
+            loginRedirect: true,
+            blocked: Boolean(result?.blocked),
+            status: result?.status ?? null
+          };
+        }
+        attempt++;
+        continue;
+      }
+
+      return result;
+    }
+
+    return { success: false, error: 'login_redirect', loginRedirect: true };
+  }
+
+  async handleAuthLoss(context = {}) {
+    const reason = context.reason || 'auth_issue';
+
+    if (this.reauthLock) {
+      const outcome = await this.reauthLock;
+      if (outcome && context.page) {
+        try {
+          await this.auth.applySessionTo(context.page);
+          context.page.__cathoSessionStamp = Date.now();
+          context.page.__cathoAuthReady = true;
+        } catch (error) {
+          console.warn('⚠️ Falha ao reaplicar sessão após reautenticação compartilhada:', error.message);
+        }
+      }
+      return outcome;
+    }
+
+    this.emit('control', {
+      action: 'reauth-start',
+      reason,
+      sessionId: this.sessionId,
+      timestamp: Date.now()
+    });
+
+    this.reauthLock = (async () => {
+      const success = await this.auth.reauthenticate(reason);
+
+      if (success) {
+        try {
+          const mainPage = this.auth.getPage();
+          if (mainPage) {
+            await this.auth.applySessionTo(mainPage);
+            mainPage.__cathoSessionStamp = Date.now();
+            mainPage.__cathoAuthReady = true;
+          }
+          if (context.page) {
+            await this.auth.applySessionTo(context.page);
+            context.page.__cathoSessionStamp = Date.now();
+            context.page.__cathoAuthReady = true;
+          }
+        } catch (error) {
+          console.warn('⚠️ Falha ao reaplicar sessão pós reautenticação:', error.message);
+        }
+        this.rateLimiter.reset();
+        this.authFailureCount = 0;
+        this.emit('control', {
+          action: 'reauth-success',
+          reason,
+          sessionId: this.sessionId,
+          timestamp: Date.now()
+        });
+        return true;
+      }
+
+      this.authFailureCount++;
+      this.stopReason = this.stopReason || { reason: 'auth_failure' };
+      this.emit('error', {
+        message: 'Reauthentication failed',
+        reason,
+        sessionId: this.sessionId
+      });
+      this.emit('control', {
+        action: 'reauth-failed',
+        reason,
+        sessionId: this.sessionId,
+        timestamp: Date.now()
+      });
+      return false;
+    })();
+
+    try {
+      return await this.reauthLock;
+    } finally {
+      this.reauthLock = null;
+    }
+  }
+
   /**
    * Main orchestration method
    */
@@ -106,11 +271,11 @@ export class ScraperOrchestrator {
 
     const {
       maxPages,
-      delay = 2000,
+      delay = this.defaults.pageDelay,
       scrapeFullProfiles = true,
-      profileDelay = 2500,
+      profileDelay = this.defaults.profileDelay,
       enableParallel = true,
-      concurrency = 21
+      concurrency = this.defaults.concurrency
     } = options;
 
     this.initializeAdaptiveSettings(options, {
@@ -128,13 +293,17 @@ export class ScraperOrchestrator {
         url: searchUrl,
         searchQuery: this.searchQuery
       });
-      const navResult = await this.navigator.goToSearch(page, searchUrl, 1);
+      const navResult = await this.navigateWithAuth(
+        page,
+        () => this.navigator.goToSearch(page, searchUrl, 1),
+        { reason: 'search_navigation', url: searchUrl }
+      );
 
-      if (!navResult.success) {
-        throw new Error(`Failed to navigate to search: ${navResult.error}`);
+      if (!navResult?.success) {
+        throw new Error(`Failed to navigate to search: ${navResult?.error || 'navigation_failed'}`);
       }
 
-      this.lastRequestTime = navResult.requestTime;
+      this.lastRequestTime = navResult.requestTime || 0;
 
       const filtersApplied = await this.navigator.applyFiltersIfNeeded(page, options);
       if (filtersApplied) {
@@ -314,14 +483,18 @@ export class ScraperOrchestrator {
                 }
 
                 // Clean up parallel workers from strategy (if any)
-                if (shouldUseParallel && this.parallelStrategy) {
+                if (shouldUseParallel && this.parallelStrategy && typeof this.parallelStrategy.cleanup === 'function') {
                   await this.parallelStrategy.cleanup().catch(() => {});
                 }
 
                 // Always return to search page after profile scraping
                 try {
-                  console.log(`🔄 Retornando à página de busca...`);
-                  await this.navigator.goToSearch(page, searchUrl, currentPage);
+                  console.log('🔄 Retornando à página de busca...');
+                  await this.navigateWithAuth(
+                    page,
+                    () => this.navigator.goToSearch(page, searchUrl, currentPage),
+                    { reason: 'search_recovery', url: searchUrl }
+                  );
                 } catch (navError) {
                   console.warn(`⚠️ Falha ao retornar à página de busca: ${navError.message}`);
                 }
@@ -345,8 +518,12 @@ export class ScraperOrchestrator {
           await humanizedWait(page, adaptivePageDelay, 0.35);
           await simulateHumanBehavior(page);
 
-          const nextResult = await this.navigator.goToNextPage(page);
-          if (!nextResult.success) {
+          const nextResult = await this.navigateWithAuth(
+            page,
+            () => this.navigator.goToNextPage(page),
+            { reason: 'pagination', pageNumber: currentPage + 1 }
+          );
+          if (!nextResult?.success) {
             console.log('ℹ️ Could not navigate to next page');
             break;
           }
@@ -813,55 +990,119 @@ export class ScraperOrchestrator {
 
     // Create scrape and save functions
     const scrapeFunction = async (workerPage, url) => {
-      const canContinue = await this.handleControlSignals();
-      if (!canContinue) {
-        return { success: false, error: 'stop_requested' };
+      const targetPage = workerPage || page;
+      if (!targetPage) {
+        return { success: false, error: 'no_available_page' };
       }
+      let attempt = 0;
+      let lastResult = null;
 
-      // Check rate limiter
-      await this.rateLimiter.waitForSlot();
-
-      // Refresh session if needed (every 3 minutes)
-      // applySessionTo will automatically snapshot fresh cookies from main page
-      try {
-        const now = Date.now();
-        const needsRefresh =
-          !workerPage.__cathoSessionStamp ||
-          now - workerPage.__cathoSessionStamp > 180000;
-        if (needsRefresh && this.auth && typeof this.auth.applySessionTo === 'function') {
-          await this.auth.applySessionTo(workerPage);
-          workerPage.__cathoSessionStamp = Date.now();
-          workerPage.__cathoAuthReady = true;
+      const recordFailure = async (failureResult) => {
+        try {
+          await this.resumeRepo.updateScrapeAttempt(url, false, failureResult?.error || 'unknown_error');
+        } catch (repoError) {
+          console.warn('⚠️ Falha ao registrar tentativa de scrape:', repoError.message);
         }
-      } catch (sessionError) {
-        console.warn('⚠️ Falha ao revalidar sessão do worker:', sessionError.message);
-      }
-
-      const result = await this.profileExtractor.extract(workerPage, { profileUrl: url });
-      const responseMeta = {
-        status: result.status ?? null,
-        loginRedirect: Boolean(result.loginRedirect),
-        blocked: Boolean(result.blocked)
       };
 
-      if (result.success) {
-        this.rateLimiter.recordRequest(responseMeta);
-        this.lastRequestTime = result.requestTime || 0;
-      } else {
-        this.rateLimiter.recordError(result.error, responseMeta);
-        this.errorCount++;
+      while (attempt < 2) {
+        const canContinue = await this.handleControlSignals();
+        if (!canContinue) {
+          const failure = { success: false, error: 'stop_requested' };
+          await recordFailure(failure);
+          return failure;
+        }
+
+        try {
+          const now = Date.now();
+          const needsRefresh =
+            !targetPage.__cathoSessionStamp ||
+            now - targetPage.__cathoSessionStamp > SCRAPER_SESSION_REFRESH_INTERVAL_MS;
+          if (needsRefresh || attempt > 0) {
+            await this.auth.applySessionTo(targetPage);
+            targetPage.__cathoSessionStamp = Date.now();
+            targetPage.__cathoAuthReady = true;
+          }
+          await this.auth.ensureAuthenticated(targetPage, { forceCheck: attempt > 0 });
+        } catch (sessionError) {
+          console.warn('⚠️ Falha ao preparar sessão do worker:', sessionError.message);
+        }
+
+        await this.rateLimiter.waitForSlot();
+
+        let result;
+        try {
+          result = await this.profileExtractor.extract(targetPage, { profileUrl: url });
+          if (result.success && !this.profileExtractor.validate({ data: result.data })) {
+            result = {
+              success: false,
+              error: 'invalid_profile_data',
+              loginRedirect: result.loginRedirect,
+              blocked: result.blocked,
+              status: result.status,
+              requestTime: result.requestTime,
+              extractionTime: result.extractionTime
+            };
+          }
+        } catch (scrapeError) {
+          result = {
+            success: false,
+            error: scrapeError.message,
+            loginRedirect: false,
+            blocked: false
+          };
+        }
+
+        const responseMeta = {
+          status: result.status ?? null,
+          loginRedirect: Boolean(result.loginRedirect),
+          blocked: Boolean(result.blocked)
+        };
+
+        if (result.success) {
+          this.rateLimiter.recordRequest(responseMeta);
+          this.lastRequestTime = result.requestTime || 0;
+        } else {
+          this.rateLimiter.recordError(result.error, responseMeta);
+          this.errorCount++;
+        }
+
+        if (typeof result.requestTime === 'number') {
+          this.metrics.phaseTimings.lastProfileNavMs = result.requestTime;
+        }
+        if (typeof result.extractionTime === 'number') {
+          this.metrics.phaseTimings.lastProfileExtractionMs = result.extractionTime;
+        }
+        this.metrics.lastProfileStatus = responseMeta.status ?? null;
+        this.metrics.lastProfileError = result.success ? null : result.error || null;
+
+        if (result.success) {
+          return result;
+        }
+
+        if ((result.loginRedirect || result.blocked) && attempt === 0) {
+          lastResult = result;
+          const recovered = await this.handleAuthLoss({
+            reason: result.loginRedirect ? 'profile_login_redirect' : 'profile_blocked',
+            page: targetPage,
+            url
+          });
+          if (!recovered) {
+            const failure = { ...result, success: false };
+            await recordFailure(failure);
+            return failure;
+          }
+          attempt += 1;
+          continue;
+        }
+
+        await recordFailure(result);
+        return result;
       }
 
-      if (typeof result.requestTime === 'number') {
-        this.metrics.phaseTimings.lastProfileNavMs = result.requestTime;
-      }
-      if (typeof result.extractionTime === 'number') {
-        this.metrics.phaseTimings.lastProfileExtractionMs = result.extractionTime;
-      }
-      this.metrics.lastProfileStatus = responseMeta.status ?? null;
-      this.metrics.lastProfileError = result.success ? null : result.error || null;
-
-      return result;
+      const fallbackFailure = lastResult || { success: false, error: 'retry_exhausted', loginRedirect: false, blocked: false };
+      await recordFailure(fallbackFailure);
+      return fallbackFailure;
     };
 
     const saveFunction = async (url, data, query) => {
